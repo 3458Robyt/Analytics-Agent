@@ -111,7 +111,7 @@ def _load_catalog(config: RuntimeConfig, console: Console) -> SchemaCatalog:
             console.print(f"[yellow]Aviso del diccionario:[/yellow] {warning}", highlight=False)
     except Exception as exc:
         console.print(
-            "[yellow]No se pudo cargar el diccionario; continuaré con metadatos de BigQuery:[/yellow] "
+            "[yellow]No se pudo cargar el diccionario; continuaré con las tablas conocidas y SQL directo:[/yellow] "
             f"{type(exc).__name__}",
             highlight=False,
         )
@@ -249,7 +249,6 @@ def _run_doctor(config: RuntimeConfig, console: Console) -> int:
 
 def _run_ask(question: str, config: RuntimeConfig, console: Console, progress: Console) -> int:
     agent, _ = _build_agent(config, console)
-    _discover(agent, config, console)
     with SessionStore(config.state_dir or None) as store:
         session_id = store.create_session(question)
         answer = agent.answer(
@@ -264,7 +263,6 @@ def _run_ask(question: str, config: RuntimeConfig, console: Console, progress: C
 
 def _run_chat(config: RuntimeConfig, console: Console, progress: Console, resume_id: str = "") -> int:
     agent, _ = _build_agent(config, console)
-    _discover(agent, config, console)
     with SessionStore(config.state_dir or None) as store:
         if resume_id:
             if not store.session_exists(resume_id):

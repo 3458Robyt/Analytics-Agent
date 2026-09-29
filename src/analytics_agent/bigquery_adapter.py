@@ -57,14 +57,25 @@ def _to_json_value(value: Any) -> Any:
 
 
 def _safe_error(exc: Exception) -> str:
-    message = str(exc)
-    if "VPC Service Controls" in message:
+    message = " ".join(str(exc).split())
+    upper_message = message.upper()
+    status = getattr(exc, "code", None)
+    if callable(status):
+        try:
+            status = status()
+        except Exception:
+            status = None
+    if any(token in upper_message for token in (
+        "VPC SERVICE CONTROLS", "VPC_SERVICE_CONTROLS", "PERIMETER_VIOLATION",
+    )):
         return "VPC Service Controls bloqueó la solicitud a BigQuery"
-    if "403" in message or "Forbidden" in message:
+    if status == 403 or "403" in message or "FORBIDDEN" in upper_message or "ACCESS DENIED" in upper_message:
         return "BigQuery denegó el acceso; verifica IAM y el perímetro de VPC Service Controls"
-    if "404" in message or "Not found" in message:
-        return "No se encontró la tabla o ubicación configurada"
-    return f"BigQuery devolvió {type(exc).__name__}"
+    if not message:
+        return f"BigQuery devolvió {type(exc).__name__}"
+    # Keep column, type, and location diagnostics so the agent can revise a
+    # candidate query after a dry-run error. Permission details stay sanitized.
+    return f"BigQuery devolvió {type(exc).__name__}: {message[:1200]}"
 
 
 class BigQueryAdapter:

@@ -285,8 +285,10 @@ class OpenAICompatibleProvider:
                 result["plan"].setdefault(field, [])
                 if not isinstance(result["plan"][field], list):
                     raise LLMError(f"`plan.{field}` debe ser una lista")
-            if not result["plan"]["metric"]:
-                raise LLMError("El plan debe identificar la métrica o el objetivo")
+            if not isinstance(result["plan"]["metric"], str) or not result["plan"]["metric"].strip():
+                # A greeting or broad request still deserves a normal response;
+                # do not reject the whole turn over an empty planning field.
+                result["plan"]["metric"] = question.strip() or "Solicitud del usuario"
         if action == "search_tables":
             if not isinstance(result["offset"], int) or result["offset"] < 0:
                 raise LLMError("`offset` debe ser un entero no negativo")

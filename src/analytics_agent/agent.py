@@ -14,7 +14,7 @@ from .schema import ColumnSchema, SchemaCatalog, TableSchema, merge_bigquery_sch
 
 
 class AnalyticsAgent:
-    """Discovers BigQuery metadata, runs read-only queries and summarizes results."""
+    """Explores known BigQuery sources with read-only SQL and summarizes results."""
 
     def __init__(
         self,
@@ -28,6 +28,27 @@ class AnalyticsAgent:
         self.llm = llm
         self.bigquery = bigquery
         self.settings = settings
+        known_descriptions = {
+            "th_primas_final": "Fuente candidata de primas emitidas; validar columnas y periodo mediante SQL.",
+            "mm_final": "Fuente candidata de movimientos mensuales de siniestros; validar definición mediante SQL.",
+            "mm_final_netos": "Fuente candidata de valores netos de siniestros; validar definición mediante SQL.",
+        }
+        for sheet_name, table_id in TABLE_IDS.items():
+            existing = self.catalog.tables.get(table_id.lower())
+            location = (
+                existing.location if existing and existing.location
+                else settings.bigquery_location or ("us-east1" if table_id.startswith("centralizacion-datos.") else "")
+            )
+            self.catalog.add_table(TableSchema(
+                sheet_name=existing.sheet_name if existing else sheet_name,
+                table_id=table_id,
+                columns=existing.columns if existing else {},
+                warnings=existing.warnings if existing else (),
+                description=(existing.description if existing else "") or known_descriptions.get(sheet_name, ""),
+                table_type=existing.table_type if existing else "",
+                location=location,
+                metadata_loaded=existing.metadata_loaded if existing else False,
+            ))
 
     def discover(self, seed_projects: tuple[str, ...] | list[str] = ()) -> dict[str, Any]:
         report = self.bigquery.discover_tables(seed_projects)
@@ -198,12 +219,115 @@ class AnalyticsAgent:
         query_data: dict[str, dict[str, Any]] = {}
         aggregate_query_ids: set[str] = set()
         query_jobs: dict[str, dict[str, str]] = {}
-        analysis_plan: dict[str, Any] | None = None
+        analysis_plan: dict[str, Any] | None = {
+            "metric": question,
+            "period": "El indicado por el usuario; si hay ambigüedad, aplicar y declarar un supuesto razonable.",
+            "grain": "El solicitado; si no se indica, devolver el total del periodo.",
+            "population": "Los registros accesibles de la fuente más probable.",
+            "filters": [],
+            "sources": list(TABLE_IDS.values()),
+            "steps": ["Probar una consulta SELECT directa y corregirla con la validación de BigQuery."],
+            "assumptions": [],
+        }
         review_feedback = ""
         review_attempts = 0
         review_limit = 2
         plan_count = 0
+        repeated_action_count = 0
         sequence = 0
+
+        def best_effort_answer(reason: str) -> AgentAnswer:
+            nonlocal bytes_processed
+            for pending_id in tuple(pending_queries):
+                try:
+                    while pending_id in pending_queries:
+                        page = self.bigquery.read_page(pending_id)
+                        if not page.has_next_page:
+                            pending_queries.discard(pending_id)
+                        page_result = self._page_result(page)
+                        query_data.setdefault(
+                            pending_id, {"columns": list(page.columns), "rows": []}
+                        )["rows"].extend(page_result["rows"])
+                        bytes_processed += int(page.bytes_processed or 0)
+                        self._record_page_job(page, query_jobs)
+                except Exception as page_error:
+                    action_history.append({
+                        "action": "read_page",
+                        "request": {"query_id": pending_id},
+                        "result": {"error": str(page_error)},
+                    })
+                    pending_queries.discard(pending_id)
+            metric = str((analysis_plan or {}).get("metric") or question).strip()
+            period = str((analysis_plan or {}).get("period") or "el periodo pedido").strip()
+            verified_summary: SummaryTable | None = None
+            for query_id in reversed(list(query_data)):
+                data = query_data[query_id]
+                rows = data.get("rows", [])
+                columns = tuple(str(item) for item in data.get("columns", []))
+                if query_id in aggregate_query_ids and query_id not in pending_queries and rows and columns:
+                    verified_summary = SummaryTable(
+                        title=f"Resultado consultado · {metric}",
+                        columns=columns,
+                        rows=tuple({column: row.get(column) for column in columns} for row in rows),
+                    )
+                    break
+            latest_error = ""
+            attempted_sql = ""
+            for entry in reversed(action_history):
+                result = entry.get("result", {})
+                if not latest_error and result.get("error"):
+                    latest_error = str(result["error"])
+                if not attempted_sql:
+                    attempted_sql = str(entry.get("request", {}).get("sql") or "")
+                if latest_error and attempted_sql:
+                    break
+            if verified_summary is not None:
+                answer_text = (
+                    f"BigQuery ejecutó una consulta agregada para **{metric}** ({period}) y devolvió "
+                    f"{len(verified_summary.rows)} filas. La tabla contiene los valores calculados directamente por SQL."
+                )
+                answer = AgentAnswer(
+                    answer=answer_text,
+                    assumptions=tuple(str(item) for item in (analysis_plan or {}).get("assumptions", []) if item),
+                    summary_table=verified_summary,
+                    query_count=query_count,
+                    tables_used=tuple(sorted(tables_used)),
+                    bytes_processed=bytes_processed,
+                    usage=total_usage,
+                    session_id=session_id,
+                    query_jobs=tuple(query_jobs.values()),
+                )
+                if session_store is not None and turn_id:
+                    stored_summary = {
+                        "title": verified_summary.title,
+                        "columns": verified_summary.columns,
+                        "rows": verified_summary.rows,
+                    }
+                    session_store.complete_turn(turn_id, answer.answer, answer.assumptions, stored_summary)
+                return answer
+
+            details = f" BigQuery informó: {latest_error}." if latest_error else ""
+            sql_note = f"\n\nÚltimo SQL probado:\n```sql\n{attempted_sql}\n```" if attempted_sql else ""
+            answer_text = (
+                f"**Interpretación:** {metric}; {period}.\n\n"
+                f"No pude verificar una cifra en esta ejecución porque {reason}.{details} "
+                "La fuente candidata más probable está entre `mm_final_netos`, `mm_final` y `th_primas_final`; "
+                "el valor requiere que BigQuery acepte la consulta. No invento un resultado numérico."
+                f"{sql_note}"
+            )
+            answer = AgentAnswer(
+                answer=answer_text,
+                assumptions=tuple(str(item) for item in (analysis_plan or {}).get("assumptions", []) if item),
+                query_count=query_count,
+                tables_used=tuple(sorted(tables_used)),
+                bytes_processed=bytes_processed,
+                usage=total_usage,
+                session_id=session_id,
+                query_jobs=tuple(query_jobs.values()),
+            )
+            if session_store is not None and turn_id:
+                session_store.complete_turn(turn_id, answer.answer, answer.assumptions)
+            return answer
 
         try:
             while True:
@@ -224,49 +348,62 @@ class AnalyticsAgent:
 
                 if action["action"] == "plan":
                     plan_count += 1
-                    if plan_count > 2:
-                        answer = AgentAnswer(
-                            answer="El análisis no pudo avanzar desde la planificación; no se ejecutó ninguna consulta.",
-                            session_id=session_id,
-                        )
-                        if session_store is not None:
-                            session_store.complete_turn(turn_id, answer.answer)
-                        return answer
                     analysis_plan = action["plan"]
-                    progress(
-                        "Plan de análisis: "
-                        + "; ".join(
-                            value for value in (
-                                str(analysis_plan.get("metric", "")).strip(),
-                                str(analysis_plan.get("period", "")).strip(),
-                                str(analysis_plan.get("grain", "")).strip(),
-                            ) if value
+                    if plan_count == 1:
+                        progress(
+                            "Interpretación inicial: "
+                            + "; ".join(
+                                value for value in (
+                                    str(analysis_plan.get("metric", "")).strip(),
+                                    str(analysis_plan.get("period", "")).strip(),
+                                    str(analysis_plan.get("grain", "")).strip(),
+                                ) if value
+                            )
                         )
-                    )
-                    tool_result = {"action": "plan", "plan": analysis_plan}
-                    sequence += 1
-                    if session_store is not None:
-                        session_store.log_action(turn_id, sequence, "plan", action, tool_result)
-                    action_history.append({"action": "plan", "plan": analysis_plan})
-                    last_tool_result = tool_result
-                    continue
-                if analysis_plan is None:
-                    analysis_plan = {
-                        "metric": question,
-                        "period": "Según la pregunta; si no se indica, declarar el supuesto usado.",
-                        "grain": "Según la pregunta.",
-                        "filters": [],
-                        "sources": [],
-                        "assumptions": [],
+                        tool_result = {"action": "plan", "plan": analysis_plan}
+                        sequence += 1
+                        if session_store is not None:
+                            session_store.log_action(turn_id, sequence, "plan", action, tool_result)
+                        action_history.append({"action": "plan", "plan": analysis_plan})
+                        last_tool_result = tool_result
+                        continue
+
+                    if plan_count > 3:
+                        return best_effort_answer("el agente repitió la planificación y no avanzó a una consulta")
+
+                    # A repeated plan is converted into a useful catalog action instead of
+                    # consuming another turn or ending without trying BigQuery.
+                    metric_text = f"{question} {analysis_plan.get('metric', '')}".lower()
+                    if plan_count == 2:
+                        action = {
+                            **action,
+                            "action": "search_tables",
+                            "search_text": metric_text,
+                            "offset": 0,
+                            "page_size": 100,
+                            "table_ids": [],
+                        }
+                    else:
+                        if any(term in metric_text for term in ("prima", "vrprima", "emisi", "ramo")):
+                            candidate = TABLE_IDS["th_primas_final"]
+                        elif any(term in metric_text for term in ("incurrido", "siniestro", "reserva", "neto", "pago")):
+                            candidate = TABLE_IDS["mm_final_netos"]
+                        else:
+                            candidate = TABLE_IDS["mm_final"]
+                        action = {
+                            **action,
+                            "action": "run_select",
+                            "sql": f"SELECT * FROM `{candidate}` LIMIT 0",
+                            "table_ids": [],
+                        }
+                    last_tool_result = {
+                        "action": "plan_already_recorded",
+                        "instruction": "No vuelvas a planificar. Usa las fuentes candidatas, prueba SQL directamente y acepta supuestos razonables.",
                     }
-                    progress("Preparando un plan de análisis inicial.")
-                    tool_result = {"action": "plan", "plan": analysis_plan, "source": "fallback"}
-                    sequence += 1
-                    if session_store is not None:
-                        session_store.log_action(turn_id, sequence, "plan", {}, tool_result)
-                    action_history.append({"action": "plan", "plan": analysis_plan})
-                    last_tool_result = tool_result
-                    continue
+                    progress(
+                        "El plan ya está registrado; "
+                        + ("busco la fuente candidata." if plan_count == 2 else "consulto directamente el esquema con SQL para poder continuar.")
+                    )
 
                 if action["action"] == "finish":
                     if pending_queries:
@@ -400,7 +537,7 @@ class AnalyticsAgent:
                 action_id = self._fingerprint({key: value for key, value in action.items() if key not in {"notes"}})
                 progress("Buscando en la memoria de conversaciones y procedimientos." if action["action"] == "search_memory" else
                          "Buscando tablas en el catálogo." if action["action"] == "search_tables" else
-                         "Consultando metadatos de BigQuery." if action["action"] == "describe_tables" else
+                         "Consultando las descripciones disponibles en el diccionario." if action["action"] == "describe_tables" else
                          "Ejecutando una consulta de lectura." if action["action"] == "run_select" else
                          "Leyendo la siguiente página de resultados.")
                 try:
@@ -442,23 +579,35 @@ class AnalyticsAgent:
                             raise BigQueryError("Indica al menos una tabla completa para describir")
                         descriptions = []
                         for table_id in action["table_ids"]:
-                            table = self._ensure_table(str(table_id))
+                            normalized_id = str(table_id).replace(":", ".").lower()
+                            table = self.catalog.tables.get(normalized_id)
+                            if table is None:
+                                descriptions.append({
+                                    "table_id": str(table_id),
+                                    "columns": [],
+                                    "note": "No hay descripción local; intenta SQL directamente y usa el dry run para validar columnas.",
+                                })
+                                continue
                             descriptions.append({
                                 "table_id": table.table_id,
                                 "description": table.description,
                                 "table_type": table.table_type,
                                 "location": table.location,
+                                "source": "diccionario opcional; sus descripciones pueden ser parciales",
                                 "columns": [
                                     {"name": column.name, "type": column.data_type, "description": column.description}
                                     for column in table.columns.values()
                                 ],
+                                "note": "Si faltan columnas o definiciones, prueba una consulta SQL candidata; no es necesario tener el esquema completo.",
                             })
-                        tool_result = {"action": "describe_tables", "tables": descriptions}
+                        tool_result = {
+                            "action": "describe_tables",
+                            "tables": descriptions,
+                            "metadata_api_used": False,
+                            "instruction": "Las descripciones son pistas; continúa con SQL directo aunque estén incompletas.",
+                        }
                     elif action["action"] == "run_select":
                         validated = validate_sql(action["sql"], self.catalog)
-                        for table_id in validated.tables:
-                            self._ensure_table(table_id)
-                        validated = validate_sql(validated.sql, self.catalog)
                         locations = {
                             self.catalog.tables[table_id].location.strip().lower()
                             for table_id in validated.tables
@@ -517,18 +666,23 @@ class AnalyticsAgent:
                     )
                 result_id = self._fingerprint({key: value for key, value in tool_result.items() if key != "rows"})
                 if previous_call == (action_id, result_id):
-                    answer = AgentAnswer(
-                        answer="El análisis quedó incompleto porque se repitió una acción sin obtener información nueva.",
-                        query_count=query_count,
-                        tables_used=tuple(sorted(tables_used)),
-                        bytes_processed=bytes_processed,
-                        usage=total_usage,
-                        session_id=session_id,
-                        query_jobs=tuple(query_jobs.values()),
-                    )
-                    if session_store is not None:
-                        session_store.complete_turn(turn_id, answer.answer)
-                    return answer
+                    repeated_action_count += 1
+                    if repeated_action_count > 1:
+                        return best_effort_answer("BigQuery o el modelo repitieron el mismo paso sin aportar evidencia nueva")
+                    action_history.append({
+                        "action": "repeat_guard",
+                        "result": {
+                            "previous_action": action["action"],
+                            "instruction": "No repitas el mismo SQL ni la misma acción. Cambia tabla/campo/fecha o entrega una respuesta provisional con los supuestos y el error observado.",
+                        },
+                    })
+                    last_tool_result = {
+                        "action": "repeated_action",
+                        "previous_result": tool_result,
+                        "instruction": "Ese paso ya se intentó y no avanzó. Haz un intento distinto o responde con la mejor interpretación disponible y explica qué quedó sin verificar.",
+                    }
+                    continue
+                repeated_action_count = 0
                 previous_call = (action_id, result_id)
                 action_history.append(self._history_entry(action["action"], action, tool_result))
                 last_tool_result = tool_result
