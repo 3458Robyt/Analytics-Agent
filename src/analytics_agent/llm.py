@@ -31,6 +31,23 @@ class Completion:
     usage: Mapping[str, int]
 
 
+def _parse_json_object(text: str, *, source: str) -> dict[str, Any]:
+    """Extract the first complete JSON object from a model response."""
+    decoder = json.JSONDecoder()
+    saw_object_start = False
+    for match in re.finditer(r"\{", text):
+        saw_object_start = True
+        try:
+            result, _ = decoder.raw_decode(text[match.start():])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(result, dict):
+            return result
+    if saw_object_start:
+        raise LLMError(f"{source} devolvió JSON inválido")
+    raise LLMError(f"{source} no devolvió un objeto JSON")
+
+
 def _endpoint_url(base_url: str, wire_api: str) -> str:
     base = base_url.strip().rstrip("/")
     parsed = urlparse(base)
@@ -93,6 +110,7 @@ class OpenAICompatibleProvider:
                 "input": input_messages,
                 "max_output_tokens": max_tokens,
                 "store": self.store_responses,
+                "text": {"format": {"type": "json_object"}},
             }
         else:
             request_payload = {
@@ -100,6 +118,7 @@ class OpenAICompatibleProvider:
                 "messages": list(messages),
                 "temperature": 0,
                 "max_tokens": max_tokens,
+                "response_format": {"type": "json_object"},
             }
         payload = json.dumps(request_payload).encode("utf-8")
         request = Request(
@@ -201,18 +220,7 @@ class OpenAICompatibleProvider:
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ), max_tokens=5000)
-        text = completion.text.strip()
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE)
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        if match is None:
-            raise LLMError("El modelo no devolvió un objeto JSON de acción")
-        try:
-            result = json.loads(match.group(0))
-        except json.JSONDecodeError as exc:
-            raise LLMError("El modelo devolvió JSON inválido para la siguiente acción") from exc
-        if not isinstance(result, dict):
-            raise LLMError("La acción del modelo debe ser un objeto JSON")
+        result = _parse_json_object(completion.text, source="El modelo")
         action = result.get("action")
         if action not in {"plan", "search_tables", "search_memory", "describe_tables", "run_select", "read_page", "finish"}:
             raise LLMError("El modelo devolvió una acción desconocida")
@@ -298,18 +306,7 @@ No conviertas una interpretación tentativa, un silencio o una única consulta e
             {"role": "system", "content": system},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)},
         ), max_tokens=1600)
-        text = completion.text.strip()
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE)
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        if match is None:
-            raise LLMError("El curador de aprendizaje no devolvió JSON")
-        try:
-            result = json.loads(match.group(0))
-        except json.JSONDecodeError as exc:
-            raise LLMError("El curador de aprendizaje devolvió JSON inválido") from exc
-        if not isinstance(result, dict):
-            raise LLMError("El resultado del curador debe ser un objeto")
+        result = _parse_json_object(completion.text, source="El curador de aprendizaje")
         result.setdefault("user_correction_detected", False)
         if not isinstance(result["user_correction_detected"], bool):
             raise LLMError("`user_correction_detected` debe ser booleano")
@@ -365,17 +362,8 @@ No conviertas una interpretación tentativa, un silencio o una única consulta e
             {"role": "system", "content": system},
             {"role": "user", "content": json.dumps(review_input, ensure_ascii=False, default=str)},
         ), max_tokens=1200)
-        text = completion.text.strip()
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE)
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        if match is None:
-            raise LLMError("El revisor no devolvió un objeto JSON")
-        try:
-            result = json.loads(match.group(0))
-        except json.JSONDecodeError as exc:
-            raise LLMError("El revisor devolvió JSON inválido") from exc
-        if not isinstance(result, dict) or not isinstance(result.get("accepted"), bool):
+        result = _parse_json_object(completion.text, source="El revisor")
+        if not isinstance(result.get("accepted"), bool):
             raise LLMError("La decisión del revisor debe incluir `accepted` booleano")
         issues = result.get("issues", [])
         if not isinstance(issues, list) or not all(isinstance(item, str) for item in issues):
