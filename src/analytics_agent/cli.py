@@ -19,6 +19,7 @@ from rich.table import Table
 from .agent import AnalyticsAgent
 from .bigquery_adapter import BigQueryAdapter, BigQueryError
 from .llm import LLMError, OpenAICompatibleProvider
+from .memory import SessionStore
 from .models import AgentAnswer, AgentSettings
 from .schema import DictionaryError, SchemaCatalog, load_dictionary
 
@@ -38,6 +39,7 @@ class RuntimeConfig:
     workbook_gcs_uri: str
     workbook_path: str
     page_size: int
+    state_dir: str = ""
 
     @classmethod
     def from_env(cls) -> "RuntimeConfig":
@@ -59,6 +61,7 @@ class RuntimeConfig:
             workbook_gcs_uri=os.environ.get("SCHEMA_WORKBOOK_GCS_URI", DEFAULT_WORKBOOK_URI).strip(),
             workbook_path=os.environ.get("SCHEMA_WORKBOOK", "").strip(),
             page_size=page_size,
+            state_dir=os.environ.get("ANALYTICS_AGENT_STATE_DIR", "").strip(),
         )
 
 
@@ -167,6 +170,14 @@ def _render_answer(answer: AgentAnswer, console: Console) -> None:
         for row in answer.summary_table.rows:
             result_table.add_row(*(_format_cell(row.get(column)) for column in answer.summary_table.columns))
         console.print(result_table)
+    if answer.detail_table and answer.detail_table.columns:
+        console.print()
+        detail_table = Table(title=answer.detail_table.title, show_lines=False, header_style="bold cyan")
+        for column in answer.detail_table.columns:
+            detail_table.add_column(column, overflow="fold")
+        for row in answer.detail_table.rows:
+            detail_table.add_row(*(_format_cell(row.get(column)) for column in answer.detail_table.columns))
+        console.print(detail_table)
     if answer.assumptions:
         console.print(Panel("\n".join(f"• {item}" for item in answer.assumptions), title="Supuestos", border_style="yellow"))
     stats: list[str] = []
@@ -176,8 +187,18 @@ def _render_answer(answer: AgentAnswer, console: Console) -> None:
         stats.append("Tablas: " + ", ".join(answer.tables_used))
     if answer.bytes_processed:
         stats.append(f"Bytes procesados: {answer.bytes_processed:,}")
+    if answer.session_id:
+        stats.append("Sesión: " + answer.session_id)
     if stats:
         console.print("[dim]" + " · ".join(stats) + "[/dim]", highlight=False)
+    if answer.query_jobs:
+        jobs = [job for job in answer.query_jobs if job.get("job_id")]
+        if jobs:
+            console.print("[dim]Trabajos BigQuery: " + ", ".join(
+                ":".join(part for part in (job.get("project", ""), job["job_id"]) if part)
+                + (f" ({job['location']})" if job.get("location") else "")
+                for job in jobs
+            ) + "[/dim]", highlight=False)
 
 
 def _answer_context(answer: AgentAnswer) -> str:
@@ -220,44 +241,113 @@ def _run_doctor(config: RuntimeConfig, console: Console) -> int:
 def _run_ask(question: str, config: RuntimeConfig, console: Console, progress: Console) -> int:
     agent, _ = _build_agent(config, console)
     _discover(agent, config, console)
-    answer = agent.answer(question, on_progress=lambda message: progress.print(f"[dim]{message}[/dim]"))
+    with SessionStore(config.state_dir or None) as store:
+        session_id = store.create_session(question)
+        answer = agent.answer(
+            question,
+            session_store=store,
+            session_id=session_id,
+            on_progress=lambda message: progress.print(f"[dim]{message}[/dim]"),
+        )
     _render_answer(answer, console)
     return 0
 
 
-def _run_chat(config: RuntimeConfig, console: Console, progress: Console) -> int:
+def _run_chat(config: RuntimeConfig, console: Console, progress: Console, resume_id: str = "") -> int:
     agent, _ = _build_agent(config, console)
     _discover(agent, config, console)
-    history: list[str] = []
-    console.print(Panel(
-        "Escribe una pregunta. Usa [bold]/clear[/bold] para borrar el contexto o [bold]/exit[/bold] para salir.",
-        title="Analytics Agent",
-        border_style="cyan",
-    ))
-    while True:
-        try:
-            question = input("Tú: ").strip()
-        except EOFError:
-            console.print()
+    with SessionStore(config.state_dir or None) as store:
+        if resume_id:
+            if not store.session_exists(resume_id):
+                raise ValueError("La sesión indicada no existe en la cuenta actual")
+            session_id = resume_id
+        else:
+            session_id = store.create_session()
+        console.print(Panel(
+            "Escribe una pregunta. Usa [bold]/new[/bold] o [bold]/clear[/bold] para iniciar otra sesión, "
+            "[bold]/sessions[/bold] para listar sesiones o [bold]/exit[/bold] para salir.",
+            title=f"Analytics Agent · sesión {session_id}",
+            border_style="cyan",
+        ))
+        while True:
+            try:
+                question = input("Tú: ").strip()
+            except EOFError:
+                console.print()
+                return 0
+            command = question.lower()
+            if command in {"/exit", "/quit", "salir", "exit", "quit"}:
+                return 0
+            if command in {"/clear", "/new"}:
+                session_id = store.create_session()
+                console.print(f"[dim]Nueva sesión: {session_id}[/dim]")
+                continue
+            if command == "/sessions":
+                _render_sessions(store, console)
+                continue
+            if not question:
+                continue
+            try:
+                answer = agent.answer(
+                    question,
+                    session_store=store,
+                    session_id=session_id,
+                    on_progress=lambda message: progress.print(f"[dim]{message}[/dim]"),
+                )
+                _render_answer(answer, console)
+            except (BigQueryError, LLMError, ValueError) as exc:
+                console.print(f"[red]No se pudo responder:[/red] {exc}", highlight=False)
+
+
+def _render_sessions(store: SessionStore, console: Console) -> None:
+    rows = store.list_sessions()
+    if not rows:
+        console.print("[dim]No hay sesiones guardadas en esta cuenta.[/dim]")
+        return
+    table = Table(title="Sesiones guardadas", header_style="bold cyan")
+    table.add_column("ID", overflow="fold")
+    table.add_column("Conversación", overflow="fold")
+    table.add_column("Turnos", justify="right")
+    table.add_column("Actualizada")
+    for row in rows:
+        table.add_row(row["session_id"], row["title"], str(row["turns"]), row["updated_at"])
+    console.print(table)
+
+
+def _run_sessions(args: argparse.Namespace, state_dir: str, console: Console) -> int:
+    with SessionStore(state_dir or None) as store:
+        if args.sessions_action == "list":
+            _render_sessions(store, console)
             return 0
-        if question.lower() in {"/exit", "/quit", "salir", "exit", "quit"}:
-            return 0
-        if question.lower() == "/clear":
-            history.clear()
-            console.print("[dim]Contexto de conversación borrado.[/dim]")
-            continue
-        if not question:
-            continue
-        try:
-            answer = agent.answer(
-                question,
-                context="\n\n".join(history[-6:]),
-                on_progress=lambda message: progress.print(f"[dim]{message}[/dim]"),
-            )
-            _render_answer(answer, console)
-            history.append(f"Usuario: {question}\nAgente: {_answer_context(answer)}")
-        except (BigQueryError, LLMError, ValueError) as exc:
-            console.print(f"[red]No se pudo responder:[/red] {exc}", highlight=False)
+        record = store.get_session(args.session_id)
+        if record is None:
+            console.print("[red]La sesión no existe en la cuenta actual.[/red]")
+            return 1
+        console.print(Panel(record["session"]["title"], title=f"Sesión {args.session_id}"))
+        for turn in record["turns"]:
+            console.print(Panel(turn["question"], title="Pregunta", border_style="cyan"))
+            if turn["answer"]:
+                console.print(Markdown(turn["answer"]))
+            plan_items = [item["result"].get("plan") for item in turn["actions"] if item["action"] == "plan"]
+            if plan_items:
+                console.print(Panel(json.dumps(plan_items[0], ensure_ascii=False, indent=2), title="Plan de análisis"))
+            sql_items = [item["sql_text"] for item in turn["actions"] if item["sql_text"]]
+            for sql in sql_items:
+                console.print(Panel(sql, title="SQL", border_style="yellow"))
+            for action in turn["actions"]:
+                result = action["result"]
+                if action["bq_job_id"]:
+                    console.print(f"[dim]Trabajo BigQuery: {action['bq_job_id']}[/dim]")
+                aggregate_rows = result.get("aggregate_rows")
+                columns = result.get("columns") or []
+                if aggregate_rows and columns:
+                    evidence_table = Table(title="Evidencia agregada guardada", header_style="bold cyan")
+                    for column in columns:
+                        evidence_table.add_column(str(column), overflow="fold")
+                    for row in aggregate_rows:
+                        evidence_table.add_row(*(_format_cell(row.get(column)) for column in columns))
+                    console.print(evidence_table)
+    return 0
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -267,7 +357,13 @@ def _build_parser() -> argparse.ArgumentParser:
     commands.add_parser("doctor", help="Revisa configuración y acceso a metadatos; no ejecuta SQL.")
     ask = commands.add_parser("ask", help="Responde una pregunta y ejecuta las consultas necesarias.")
     ask.add_argument("question", nargs="+", help="Pregunta de negocio.")
-    commands.add_parser("chat", help="Abre una conversación interactiva en la terminal.")
+    chat = commands.add_parser("chat", help="Abre una conversación persistente en la terminal.")
+    chat.add_argument("--resume", help="Continúa una sesión guardada por su identificador.")
+    sessions = commands.add_parser("sessions", help="Lista o muestra sesiones de la cuenta actual.")
+    sessions_commands = sessions.add_subparsers(dest="sessions_action", required=True)
+    sessions_commands.add_parser("list", help="Lista las sesiones guardadas.")
+    show = sessions_commands.add_parser("show", help="Muestra una sesión con SQL y referencias de BigQuery.")
+    show.add_argument("session_id")
     return parser
 
 
@@ -286,12 +382,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             load_dotenv(env_file, override=False)
         elif args.env_file != ".env":
             raise FileNotFoundError(f"No existe el archivo de configuración: {env_file}")
-        config = RuntimeConfig.from_env()
         if args.command == "doctor":
+            config = RuntimeConfig.from_env()
             return _run_doctor(config, console)
         if args.command == "ask":
+            config = RuntimeConfig.from_env()
             return _run_ask(" ".join(args.question).strip(), config, console, progress)
-        return _run_chat(config, console, progress)
+        if args.command == "sessions":
+            return _run_sessions(args, os.environ.get("ANALYTICS_AGENT_STATE_DIR", "").strip(), console)
+        config = RuntimeConfig.from_env()
+        return _run_chat(config, console, progress, args.resume or "")
     except KeyboardInterrupt:
         console.print("\n[dim]Interrumpido.[/dim]")
         return 130

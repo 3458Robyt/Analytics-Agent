@@ -22,6 +22,8 @@ def action(kind, **kwargs):
         "answer": "",
         "assumptions": [],
         "summary_table": None,
+        "plan": {},
+        "present_rows": False,
         **kwargs,
     }
 
@@ -30,10 +32,34 @@ class StubLLM:
     def __init__(self, actions):
         self.actions = list(actions)
         self.calls = []
+        self.plan_sent = False
 
     def next_action(self, question, **kwargs):
         self.calls.append((question, kwargs))
+        if not self.plan_sent:
+            self.plan_sent = True
+            return action("plan", plan={
+                "metric": question,
+                "period": "Según la pregunta",
+                "grain": "Según la pregunta",
+                "population": "Registros disponibles",
+                "filters": [],
+                "sources": [],
+                "steps": ["Consultar y revisar evidencia"],
+                "assumptions": [],
+            }), {"prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13}
         return self.actions.pop(0), {"prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13}
+
+
+class ReviewingStubLLM(StubLLM):
+    def __init__(self, actions):
+        super().__init__(actions)
+        self.reviews = []
+
+    def review_answer(self, question, **kwargs):
+        self.reviews.append(kwargs)
+        issues = list(kwargs.get("deterministic_issues", ()))
+        return {"accepted": not issues, "issues": issues}, {"total_tokens": 4}
 
 
 class StubBigQuery:
@@ -113,7 +139,7 @@ class AgentLoopTests(unittest.TestCase):
         ])
         result = make_agent(llm, StubBigQuery()).answer("¿Qué tabla tiene primas?")
         self.assertIn("esquema", result.answer)
-        self.assertEqual(3, len(llm.calls))
+        self.assertEqual(4, len(llm.calls))
 
     def test_dry_run_failure_prevents_query_and_agent_can_finish(self):
         llm = StubLLM([
@@ -142,6 +168,36 @@ class AgentLoopTests(unittest.TestCase):
         result = make_agent(llm, bq).answer("Elimina filas")
         self.assertEqual(0, bq.executions)
         self.assertEqual("No ejecuté una instrucción de escritura.", result.answer)
+
+    def test_requested_detail_rows_include_all_pages(self):
+        self.assertFalse(AnalyticsAgent._is_aggregate(f"SELECT ramo FROM `{TABLE_ID}`"))
+        llm = StubLLM([
+            action("run_select", sql=f"SELECT ramo FROM `{TABLE_ID}`"),
+            action("read_page", query_id="query-1"),
+            action("finish", answer="Estos son los ramos consultados.", present_rows=True),
+        ])
+        result = make_agent(llm, StubBigQuery()).answer("Muestra todos los ramos")
+        self.assertIsNotNone(result.detail_table)
+        self.assertEqual(2, len(result.detail_table.rows))
+        self.assertEqual("AUTO", result.detail_table.rows[0]["ramo"])
+        self.assertEqual("VIDA", result.detail_table.rows[1]["ramo"])
+
+    def test_table_mismatch_triggers_revision_and_retry(self):
+        llm = ReviewingStubLLM([
+            action("run_select", sql=SQL),
+            action("read_page", query_id="query-1"),
+            action("finish", answer="La suma está verificada.", summary_table={
+                "title": "Prima por ramo", "columns": ["ramo", "prima"], "rows": [["INVENTADO", 999]],
+            }),
+            action("finish", answer="AUTO tuvo 100 y VIDA tuvo 200.", summary_table={
+                "title": "Prima por ramo", "columns": ["ramo", "prima"], "rows": [["AUTO", 100], ["VIDA", 200]],
+            }),
+        ])
+        result = make_agent(llm, StubBigQuery()).answer("Prima por ramo")
+        self.assertEqual(2, len(llm.reviews))
+        self.assertIn("no coincide", " ".join(llm.reviews[0]["deterministic_issues"]))
+        self.assertEqual(2, len(result.summary_table.rows))
+        self.assertNotIn("Revisión:", result.answer)
 
 
 if __name__ == "__main__":

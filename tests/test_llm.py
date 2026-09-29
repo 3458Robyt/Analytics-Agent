@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from analytics_agent.llm import OpenAICompatibleProvider
+from analytics_agent.llm import Completion, OpenAICompatibleProvider
 
 
 class FakeResponse:
@@ -85,6 +85,50 @@ class LLMProviderTests(unittest.TestCase):
         )
         provider.complete(({"role": "user", "content": "test"},))
         self.assertFalse(seen["body"]["store"])
+
+    def test_parses_analysis_plan_and_passes_memory_and_glossary(self):
+        class StubProvider(OpenAICompatibleProvider):
+            def complete(self, messages, *, max_tokens=1200):
+                self.messages = messages
+                return Completion(
+                    text=json.dumps({
+                        "action": "plan",
+                        "plan": {"metric": "prima", "period": "2026-S1", "grain": "ramo"},
+                    }),
+                    usage={"total_tokens": 9},
+                )
+
+        provider = StubProvider(base_url="https://llm.example/v1", model="m", api_key="k")
+        result, _ = provider.next_action(
+            "prima por ramo",
+            retrieved_memory="Cuenta todos los movimientos.",
+            glossary_context='[{"term":"prima emitida"}]',
+        )
+        self.assertEqual("plan", result["action"])
+        self.assertEqual("ramo", result["plan"]["grain"])
+        self.assertIn("Cuenta todos los movimientos", provider.messages[1]["content"])
+        self.assertIn("prima emitida", provider.messages[1]["content"])
+
+    def test_reviewer_returns_structured_decision(self):
+        class StubProvider(OpenAICompatibleProvider):
+            def complete(self, messages, *, max_tokens=1200):
+                self.messages = messages
+                return Completion(
+                    text='{"accepted":true,"issues":[]}',
+                    usage={"total_tokens": 5},
+                )
+
+        provider = StubProvider(base_url="https://llm.example/v1", model="m", api_key="k")
+        result, usage = provider.review_answer(
+            "prima por ramo",
+            plan={"metric": "prima", "grain": "ramo"},
+            draft={"answer": "La suma fue 10."},
+            action_history=[{"action": "run_select"}],
+            evidence=[{"rows": [{"total": 10}]}],
+        )
+        self.assertTrue(result["accepted"])
+        self.assertEqual(5, usage["total_tokens"])
+        self.assertIn("run_select", provider.messages[1]["content"])
 
 
 if __name__ == "__main__":

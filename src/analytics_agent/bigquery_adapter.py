@@ -35,6 +35,9 @@ class QueryPage:
     has_next_page: bool
     total_rows: int | None
     bytes_processed: int | None
+    job_id: str = ""
+    job_project: str = ""
+    location: str = ""
 
 
 def _to_json_value(value: Any) -> Any:
@@ -270,8 +273,17 @@ class BigQueryAdapter:
         except StopIteration:
             self._pages.pop(query_id, None)
             self._jobs.pop(query_id, None)
-            return QueryPage(query_id, (), (), False, int(getattr(iterator, "total_rows", 0) or 0) if iterator else None,
-                             int(getattr(job, "total_bytes_processed", 0) or 0))
+            return QueryPage(
+                query_id,
+                (),
+                (),
+                False,
+                int(getattr(iterator, "total_rows", 0) or 0) if iterator else None,
+                int(getattr(job, "total_bytes_processed", 0) or 0),
+                str(getattr(job, "job_id", "") or ""),
+                str(getattr(job, "project", "") or ""),
+                str(getattr(job, "location", "") or ""),
+            )
         schema = getattr(iterator, "schema", None) if iterator is not None else None
         schema = schema or getattr(job, "schema", None) or ()
         columns = tuple(str(getattr(field, "name", "")) for field in schema if getattr(field, "name", ""))
@@ -292,6 +304,9 @@ class BigQueryAdapter:
             has_next_page=has_next,
             total_rows=int(total_rows) if total_rows is not None else None,
             bytes_processed=bytes_processed,
+            job_id=str(getattr(job, "job_id", "") or ""),
+            job_project=str(getattr(job, "project", "") or ""),
+            location=str(getattr(job, "location", "") or ""),
         )
 
 

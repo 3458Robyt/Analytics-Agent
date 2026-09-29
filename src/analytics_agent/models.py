@@ -57,7 +57,10 @@ class AgentAnswer:
     answer: str
     assumptions: tuple[str, ...] = ()
     summary_table: SummaryTable | None = None
+    detail_table: SummaryTable | None = None
     query_count: int = 0
     tables_used: tuple[str, ...] = ()
     bytes_processed: int = 0
     usage: dict[str, int] = field(default_factory=dict)
+    session_id: str = ""
+    query_jobs: tuple[dict[str, str], ...] = ()

@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "terms": [
+    {
+      "term": "prima emitida",
+      "aliases": ["primas emitidas", "prima por ramo"],
+      "definition": "En las consultas confirmadas para esta POC, calcular la prima emitida como SUM(vrprima), usando fecha_emision para el periodo y nombre_ramo_comercial para agrupar por ramo.",
+      "tables": ["centralizacion-datos.analytics_curated.th_primas_final"],
+      "fields": ["vrprima", "fecha_emision", "nombre_ramo_comercial"],
+      "movement_policy": "Incluir todos los registros y movimientos del periodo solicitado, sin deduplicar endosos ni excluir ajustes.",
+      "unit": "Usar la moneda almacenada en la fuente; no convertir ni combinar monedas salvo que el usuario lo pida y exista un tipo de cambio definido.",
+      "status": "validated",
+      "source": "Confirmación explícita del usuario durante la POC: contar todos los movimientos.",
+      "validated_by": "user"
+    }
+  ]
+}

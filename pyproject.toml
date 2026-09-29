@@ -22,3 +22,6 @@ analytics-agent = "analytics_agent.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+analytics_agent = ["data/*.json"]

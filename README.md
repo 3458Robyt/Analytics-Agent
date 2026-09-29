@@ -73,11 +73,30 @@ analytics-agent doctor
 # Ejecuta una pregunta
 analytics-agent ask "¿Cuál fue la prima emitida por ramo durante el primer semestre de 2026?"
 
-# Inicia una conversación interactiva; /clear limpia el contexto y /exit termina
+# Inicia una conversación interactiva; /clear abre otra sesión y /exit termina
 analytics-agent chat
+
+# Lista las sesiones guardadas en la cuenta local
+analytics-agent sessions list
+
+# Inspecciona pregunta, respuesta, SQL y referencias de una sesión
+analytics-agent sessions show ID_SESION
+
+# Reanuda una conversación en la CLI
+analytics-agent chat --resume ID_SESION
 ```
 
 `doctor` valida ADC mediante el inventario de metadatos de BigQuery. La ejecución de `ask` y `chat` puede generar varias consultas y costos según los datos consultados. El agente conserva la restricción de solo lectura: no genera DML, DDL ni scripts mutantes. El diccionario no necesita contener todas las columnas; BigQuery aporta el esquema disponible.
+
+## Memoria y glosario
+
+La CLI guarda automáticamente sesiones, preguntas, respuestas, SQL, resultados agregados y referencias a trabajos de BigQuery en SQLite. Por defecto el archivo está en `~/.local/share/analytics-agent/state.sqlite3`; los permisos locales se restringen a la cuenta del runtime. `ANALYTICS_AGENT_STATE_DIR` permite cambiar la carpeta. Las filas de consultas detalladas se muestran en pantalla cuando se solicitan, pero no se guardan en el historial. El comando `/clear` inicia otra sesión y conserva las anteriores; usa `/new` para el mismo propósito.
+
+La memoria pertenece a la cuenta de sistema que ejecuta la CLI. En la POC, ejecuta siempre desde la misma cuenta de Workbench para conservar el historial. Esta separación local no autentica usuarios que compartan una cuenta de sistema.
+
+El glosario compartido, versionado junto al código, está en `src/analytics_agent/data/business_glossary.json`. Solo sus entradas marcadas como validadas se entregan al modelo; el agente no las edita. Las definiciones nuevas se agregan mediante cambios revisados en Git.
+
+Antes de responder, el agente registra un plan de análisis, conserva la secuencia de herramientas, contrasta la tabla resumen con las filas agregadas consultadas y llama al modelo revisor para buscar diferencias de periodo, filtros, unidad y evidencia. El revisor puede hacer que el agente vuelva a consultar; después de dos intentos la respuesta indica los puntos que quedaron sin confirmar.
 
 ## Pruebas locales
 
