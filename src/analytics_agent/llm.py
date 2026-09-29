@@ -110,7 +110,6 @@ class OpenAICompatibleProvider:
                 "input": input_messages,
                 "max_output_tokens": max_tokens,
                 "store": self.store_responses,
-                "text": {"format": {"type": "json_object"}},
             }
         else:
             request_payload = {
@@ -118,7 +117,6 @@ class OpenAICompatibleProvider:
                 "messages": list(messages),
                 "temperature": 0,
                 "max_tokens": max_tokens,
-                "response_format": {"type": "json_object"},
             }
         payload = json.dumps(request_payload).encode("utf-8")
         request = Request(
@@ -190,6 +188,47 @@ class OpenAICompatibleProvider:
             raise LLMError("El endpoint de IA no devolvió texto utilizable")
         return Completion(text=text, usage=usage)
 
+    def _complete_json(
+        self,
+        messages: Sequence[Mapping[str, str]],
+        *,
+        max_tokens: int,
+        source: str,
+    ) -> tuple[dict[str, Any], Mapping[str, int]]:
+        """Request JSON using only prompt instructions, retrying once if it is malformed."""
+        completion = self.complete(messages, max_tokens=max_tokens)
+        try:
+            result = _parse_json_object(completion.text, source=source)
+            return result, completion.usage
+        except LLMError:
+            retry_messages = [dict(message) for message in messages]
+            retry_note = (
+                "La respuesta anterior no era un objeto JSON válido. Repite la misma tarea y devuelve "
+                "exclusivamente un objeto JSON válido, sin Markdown, comentarios ni texto adicional."
+            )
+            system_index = next(
+                (index for index, message in enumerate(retry_messages)
+                 if message.get("role") in {"system", "developer"}),
+                None,
+            )
+            if system_index is None:
+                retry_messages.insert(0, {"role": "system", "content": retry_note})
+            else:
+                original = str(retry_messages[system_index].get("content", ""))
+                retry_messages[system_index]["content"] = original + "\n\n" + retry_note
+
+            retry = self.complete(retry_messages, max_tokens=max_tokens)
+            try:
+                result = _parse_json_object(retry.text, source=source)
+            except LLMError as retry_error:
+                raise LLMError(f"{source} no devolvió JSON válido tras dos intentos") from retry_error
+
+            usage = {
+                key: int(completion.usage.get(key, 0) or 0) + int(retry.usage.get(key, 0) or 0)
+                for key in {**completion.usage, **retry.usage}
+            }
+            return result, usage
+
     def next_action(
         self,
         question: str,
@@ -216,11 +255,10 @@ class OpenAICompatibleProvider:
             "resultado_del_ultimo_paso": last_tool_result or {},
             "retroalimentacion_de_revision": review_feedback,
         }, ensure_ascii=False, default=str)
-        completion = self.complete((
+        result, usage = self._complete_json((
             {"role": "system", "content": system},
             {"role": "user", "content": user},
-        ), max_tokens=5000)
-        result = _parse_json_object(completion.text, source="El modelo")
+        ), max_tokens=5000, source="El modelo")
         action = result.get("action")
         if action not in {"plan", "search_tables", "search_memory", "describe_tables", "run_select", "read_page", "finish"}:
             raise LLMError("El modelo devolvió una acción desconocida")
@@ -270,7 +308,7 @@ class OpenAICompatibleProvider:
                 raise LLMError("`summary_table` debe ser un objeto o null")
             if not isinstance(result["present_rows"], bool):
                 raise LLMError("`present_rows` debe ser booleano")
-        return result, completion.usage
+        return result, usage
 
     def review_learning(
         self,
@@ -302,11 +340,10 @@ No conviertas una interpretación tentativa, un silencio o una única consulta e
             "respuesta_verificada": bool(verified),
             "aprendizajes_activos_para_comprobar_correcciones": active_learnings,
         }
-        completion = self.complete((
+        result, usage = self._complete_json((
             {"role": "system", "content": system},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)},
-        ), max_tokens=1600)
-        result = _parse_json_object(completion.text, source="El curador de aprendizaje")
+        ), max_tokens=1600, source="El curador de aprendizaje")
         result.setdefault("user_correction_detected", False)
         if not isinstance(result["user_correction_detected"], bool):
             raise LLMError("`user_correction_detected` debe ser booleano")
@@ -331,7 +368,7 @@ No conviertas una interpretación tentativa, un silencio o una única consulta e
         if not all(isinstance(item.get("key"), str) and isinstance(item.get("reason"), str)
                    for item in result["invalidates"]):
             raise LLMError("Cada invalidación requiere `key` y `reason` de texto")
-        return result, completion.usage
+        return result, usage
 
     def review_answer(
         self,
@@ -358,11 +395,10 @@ No conviertas una interpretación tentativa, un silencio o una única consulta e
             "evidencia_agregada": list(evidence),
             "errores_deterministas": list(deterministic_issues),
         }
-        completion = self.complete((
+        result, usage = self._complete_json((
             {"role": "system", "content": system},
             {"role": "user", "content": json.dumps(review_input, ensure_ascii=False, default=str)},
-        ), max_tokens=1200)
-        result = _parse_json_object(completion.text, source="El revisor")
+        ), max_tokens=1200, source="El revisor")
         if not isinstance(result.get("accepted"), bool):
             raise LLMError("La decisión del revisor debe incluir `accepted` booleano")
         issues = result.get("issues", [])
@@ -371,4 +407,4 @@ No conviertas una interpretación tentativa, un silencio o una única consulta e
         if deterministic_issues:
             result["accepted"] = False
         result["issues"] = issues
-        return result, completion.usage
+        return result, usage
