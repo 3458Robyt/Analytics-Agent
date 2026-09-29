@@ -175,6 +175,9 @@ class AnalyticsAgent:
                 retrieved_memory += "Conversación reciente de esta sesión:\n" + recent_context
             if search_context:
                 retrieved_memory += "\n\nConversaciones anteriores relevantes:\n" + search_context
+            learning_context = session_store.learning_context(question)
+            if learning_context:
+                retrieved_memory += "\n\nPreferencias y procedimientos aprendidos:\n" + learning_context
         try:
             from .memory import load_glossary
 
@@ -314,6 +317,10 @@ class AnalyticsAgent:
                             }
                     issues = [*deterministic_issues, *review_result.get("issues", [])]
                     accepted = bool(review_result.get("accepted", False)) and not deterministic_issues
+                    learning_eligible = accepted and not any(
+                        entry.get("result", {}).get("action") == "tool_error"
+                        for entry in action_history
+                    )
                     if not accepted and review_attempts < review_limit:
                         review_attempts += 1
                         review_feedback = "\n".join(dict.fromkeys(issues)) or "La respuesta necesita una comprobación adicional."
@@ -352,15 +359,68 @@ class AnalyticsAgent:
                         if summary is not None:
                             stored_summary = {"title": summary.title, "columns": summary.columns, "rows": summary.rows}
                         session_store.complete_turn(turn_id, answer.answer, answer.assumptions, stored_summary)
+                        learning_updates: list[str] = []
+                        learning_reviewer = getattr(self.llm, "review_learning", None)
+                        if callable(learning_reviewer):
+                            progress("Guardando preferencias y procedimientos reutilizables.")
+                            try:
+                                learning_result, learning_usage = learning_reviewer(
+                                    question,
+                                    prior_context=retrieved_memory,
+                                    plan=analysis_plan,
+                                    answer=answer.answer,
+                                    action_history=action_history,
+                                    verified=learning_eligible,
+                                    active_learnings=session_store.learning_context(question),
+                                )
+                                self._add_usage(total_usage, learning_usage)
+                                learning_updates = session_store.apply_learning_review(
+                                    turn_id,
+                                    learning_result,
+                                    verified=learning_eligible,
+                                )
+                            except Exception as learning_error:
+                                # Learning is best-effort: an extraction failure must not discard a useful answer.
+                                progress(f"No se pudo actualizar el aprendizaje ({type(learning_error).__name__}).")
+                        answer = AgentAnswer(
+                            answer=answer.answer,
+                            assumptions=answer.assumptions,
+                            summary_table=answer.summary_table,
+                            detail_table=answer.detail_table,
+                            query_count=answer.query_count,
+                            tables_used=answer.tables_used,
+                            bytes_processed=answer.bytes_processed,
+                            usage=answer.usage,
+                            session_id=answer.session_id,
+                            query_jobs=answer.query_jobs,
+                            learning_updates=tuple(learning_updates),
+                        )
                     return answer
 
                 action_id = self._fingerprint({key: value for key, value in action.items() if key not in {"notes"}})
-                progress("Buscando tablas en el catálogo." if action["action"] == "search_tables" else
+                progress("Buscando en la memoria de conversaciones y procedimientos." if action["action"] == "search_memory" else
+                         "Buscando tablas en el catálogo." if action["action"] == "search_tables" else
                          "Consultando metadatos de BigQuery." if action["action"] == "describe_tables" else
                          "Ejecutando una consulta de lectura." if action["action"] == "run_select" else
                          "Leyendo la siguiente página de resultados.")
                 try:
-                    if action["action"] == "search_tables":
+                    if action["action"] == "search_memory":
+                        if session_store is None:
+                            tool_result = {"action": "search_memory", "matches": [], "note": "No hay memoria persistente en esta ejecución."}
+                        else:
+                            query = action["search_text"]
+                            sessions = session_store.search_context(query)
+                            learnings = [
+                                item for item in session_store.search_learning(query)
+                                if item.get("status") == "active"
+                            ]
+                            tool_result = {
+                                "action": "search_memory",
+                                "search_text": query,
+                                "conversation_matches": sessions,
+                                "learning_matches": learnings,
+                            }
+                    elif action["action"] == "search_tables":
                         matches, total = self.catalog.search_tables(
                             action["search_text"], offset=action["offset"], page_size=action["page_size"]
                         )

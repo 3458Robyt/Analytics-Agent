@@ -18,10 +18,16 @@ from rich.table import Table
 
 from .agent import AnalyticsAgent
 from .bigquery_adapter import BigQueryAdapter, BigQueryError
-from .llm import LLMError, OpenAICompatibleProvider
+from .llm import (
+    AGENT_SYSTEM_PROMPT_VERSION,
+    LLMError,
+    OpenAICompatibleProvider,
+    load_default_agent_system_prompt,
+)
 from .memory import SessionStore
 from .models import AgentAnswer, AgentSettings
 from .schema import DictionaryError, SchemaCatalog, load_dictionary
+from .evaluation import evaluate_prompt, load_evaluation_cases
 
 
 DEFAULT_WORKBOOK_URI = (
@@ -180,6 +186,9 @@ def _render_answer(answer: AgentAnswer, console: Console) -> None:
         console.print(detail_table)
     if answer.assumptions:
         console.print(Panel("\n".join(f"• {item}" for item in answer.assumptions), title="Supuestos", border_style="yellow"))
+    if answer.learning_updates:
+        console.print(Panel("\n".join(f"• {item}" for item in answer.learning_updates),
+                            title="Aprendizaje actualizado", border_style="green"))
     stats: list[str] = []
     if answer.query_count:
         stats.append(f"Consultas: {answer.query_count}")
@@ -350,6 +359,94 @@ def _run_sessions(args: argparse.Namespace, state_dir: str, console: Console) ->
     return 0
 
 
+def _run_learning(args: argparse.Namespace, state_dir: str, console: Console) -> int:
+    with SessionStore(state_dir or None) as store:
+        if args.learning_action == "list":
+            rows = store.list_learning(status=args.status or "")
+            if not rows:
+                console.print("[dim]No hay aprendizajes guardados con ese estado.[/dim]")
+                return 0
+            table = Table(title="Aprendizajes", header_style="bold cyan")
+            table.add_column("ID", overflow="fold")
+            table.add_column("Tipo")
+            table.add_column("Estado")
+            table.add_column("Enseñanza", overflow="fold")
+            table.add_column("Evidencia", justify="right")
+            table.add_column("Verificada", justify="right")
+            for row in rows:
+                table.add_row(
+                    row["learning_id"],
+                    row["kind"],
+                    row["status"],
+                    row["title"],
+                    str(row["evidence_count"]),
+                    str(row["verified_evidence_count"]),
+                )
+            console.print(table)
+            return 0
+        if args.learning_action == "show":
+            record = store.get_learning(args.learning_id)
+            if record is None:
+                console.print("[red]Ese aprendizaje no existe en la cuenta actual.[/red]")
+                return 1
+            console.print(Panel(json.dumps(record, ensure_ascii=False, indent=2),
+                                title=f"Aprendizaje {args.learning_id}"))
+            return 0
+        if args.learning_action == "disable":
+            changed = store.disable_learning(args.learning_id)
+            message = "Aprendizaje desactivado"
+        else:
+            changed = store.enable_learning(args.learning_id)
+            message = "Aprendizaje reactivado; las propuestas de negocio siguen pendientes"
+        if not changed:
+            console.print("[red]Ese aprendizaje no existe o ya está en ese estado.[/red]")
+            return 1
+        console.print(f"[green]{message}:[/green] {args.learning_id}")
+        return 0
+
+
+def _run_evaluation(args: argparse.Namespace, config: RuntimeConfig, console: Console) -> int:
+    candidate_path = Path(args.candidate_prompt).expanduser()
+    candidate_prompt = candidate_path.read_text(encoding="utf-8").strip()
+    if not candidate_prompt:
+        raise ValueError("El prompt candidato está vacío")
+    cases = load_evaluation_cases(args.cases or "")
+    if not cases:
+        raise ValueError("La batería de evaluación no contiene casos")
+    settings = config.settings
+    baseline_name, baseline = evaluate_prompt(
+        f"{AGENT_SYSTEM_PROMPT_VERSION} actual", load_default_agent_system_prompt(), cases, settings,
+        wire_api=config.wire_api, store_responses=config.store_responses,
+    )
+    candidate_name, candidate = evaluate_prompt(
+        "candidato", candidate_prompt, cases, settings,
+        wire_api=config.wire_api, store_responses=config.store_responses,
+    )
+    table = Table(title="Comparación de prompts con BigQuery simulado", header_style="bold cyan")
+    table.add_column("Caso")
+    table.add_column(baseline_name, justify="center")
+    table.add_column(candidate_name, justify="center")
+    for base_result, candidate_result in zip(baseline, candidate):
+        table.add_row(
+            base_result.case_id,
+            "[green]OK[/green]" if base_result.passed else "[red]FALLÓ[/red]",
+            "[green]OK[/green]" if candidate_result.passed else "[red]FALLÓ[/red]",
+        )
+    console.print(table)
+    for variant, results in ((baseline_name, baseline), (candidate_name, candidate)):
+        passed = sum(result.passed for result in results)
+        tokens = sum(result.total_tokens for result in results)
+        console.print(f"{variant}: {passed}/{len(results)} casos correctos · {tokens:,} tokens")
+        for result in results:
+            if result.failures:
+                console.print(Panel("\n".join(f"• {failure}" for failure in result.failures),
+                                    title=f"{variant} · {result.case_id}", border_style="red"))
+    baseline_passed = sum(result.passed for result in baseline)
+    candidate_passed = sum(result.passed for result in candidate)
+    console.print("[dim]La evaluación solo compara resultados; no activa ni reemplaza el prompt vigente.[/dim]")
+    return 0 if candidate_passed >= baseline_passed and candidate_passed > 0 else 1
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="analytics-agent", description="Consulta BigQuery en lenguaje natural.")
     parser.add_argument("--env-file", default=".env", help="Archivo local de configuración (por defecto: .env).")
@@ -364,6 +461,20 @@ def _build_parser() -> argparse.ArgumentParser:
     sessions_commands.add_parser("list", help="Lista las sesiones guardadas.")
     show = sessions_commands.add_parser("show", help="Muestra una sesión con SQL y referencias de BigQuery.")
     show.add_argument("session_id")
+    learning = commands.add_parser("learn", help="Consulta o desactiva aprendizajes automáticos.")
+    learning_commands = learning.add_subparsers(dest="learning_action", required=True)
+    learning_list = learning_commands.add_parser("list", help="Lista aprendizajes y propuestas del usuario actual.")
+    learning_list.add_argument("--status", choices=("candidate", "active", "proposed", "disabled"), default="",
+                               help="Filtra por estado; por defecto muestra todos.")
+    learning_show = learning_commands.add_parser("show", help="Muestra el contenido y evidencia de un aprendizaje.")
+    learning_show.add_argument("learning_id")
+    learning_disable = learning_commands.add_parser("disable", help="Desactiva un aprendizaje activo o candidato.")
+    learning_disable.add_argument("learning_id")
+    learning_enable = learning_commands.add_parser("enable", help="Restaura un aprendizaje desactivado por el usuario.")
+    learning_enable.add_argument("learning_id")
+    evaluate = commands.add_parser("evaluate", help="Compara un prompt candidato con BigQuery simulado.")
+    evaluate.add_argument("--candidate-prompt", required=True, help="Archivo de texto con el prompt candidato completo.")
+    evaluate.add_argument("--cases", default="", help="Archivo JSON opcional de casos de evaluación.")
     return parser
 
 
@@ -390,7 +501,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_ask(" ".join(args.question).strip(), config, console, progress)
         if args.command == "sessions":
             return _run_sessions(args, os.environ.get("ANALYTICS_AGENT_STATE_DIR", "").strip(), console)
+        if args.command == "learn":
+            return _run_learning(args, os.environ.get("ANALYTICS_AGENT_STATE_DIR", "").strip(), console)
         config = RuntimeConfig.from_env()
+        if args.command == "evaluate":
+            return _run_evaluation(args, config, console)
         return _run_chat(config, console, progress, args.resume or "")
     except KeyboardInterrupt:
         console.print("\n[dim]Interrumpido.[/dim]")

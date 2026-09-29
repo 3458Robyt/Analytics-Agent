@@ -1,9 +1,11 @@
 import unittest
+import tempfile
 
 from analytics_agent.agent import AnalyticsAgent
 from analytics_agent.bigquery_adapter import BigQueryError, DryRunResult, QueryPage
 from analytics_agent.models import AgentSettings
 from tests.helpers import TABLE_ID, sample_catalog
+from analytics_agent.memory import SessionStore
 
 
 SQL = f"SELECT ramo, SUM(vrprima) AS prima FROM `{TABLE_ID}` GROUP BY ramo"
@@ -60,6 +62,22 @@ class ReviewingStubLLM(StubLLM):
         self.reviews.append(kwargs)
         issues = list(kwargs.get("deterministic_issues", ()))
         return {"accepted": not issues, "issues": issues}, {"total_tokens": 4}
+
+
+class LearningStubLLM(ReviewingStubLLM):
+    def review_learning(self, question, **kwargs):
+        return {
+            "user_correction_detected": False,
+            "invalidates": [],
+            "preferences": [{
+                "key": "answer_style", "title": "Respuestas directas",
+                "content": "Responder directamente y resumir los datos principales.",
+                "trigger": "En preguntas analíticas", "confidence": 0.9,
+                "explicit_user_statement": True,
+            }],
+            "procedures": [],
+            "business_proposals": [],
+        }, {"total_tokens": 7}
 
 
 class StubBigQuery:
@@ -198,6 +216,33 @@ class AgentLoopTests(unittest.TestCase):
         self.assertIn("no coincide", " ".join(llm.reviews[0]["deterministic_issues"]))
         self.assertEqual(2, len(result.summary_table.rows))
         self.assertNotIn("Revisión:", result.answer)
+
+    def test_search_memory_action_reads_past_turns(self):
+        llm = StubLLM([
+            action("search_memory", search_text="prima por ramo"),
+            action("finish", answer="Usé el contexto anterior."),
+        ])
+        with tempfile.TemporaryDirectory() as directory, SessionStore(directory, owner="user:1") as store:
+            prior_session = store.create_session("Consulta previa")
+            prior_turn = store.begin_turn(prior_session, "Prima emitida por ramo")
+            store.complete_turn(prior_turn, "Se usa vrprima por fecha_emision.")
+            active_session = store.create_session("Seguimiento")
+            result = make_agent(llm, StubBigQuery()).answer(
+                "¿Cómo calculo la prima por ramo?", session_store=store, session_id=active_session
+            )
+            self.assertIn("contexto anterior", result.answer)
+            self.assertIn("prima emitida", str(llm.calls[-1][1]["last_tool_result"]).lower())
+
+    def test_learning_review_runs_after_answer_and_persists_explicit_preference(self):
+        llm = LearningStubLLM([action("finish", answer="Respuesta directa.")])
+        with tempfile.TemporaryDirectory() as directory, SessionStore(directory, owner="user:1") as store:
+            session_id = store.create_session("Pregunta")
+            result = make_agent(llm, StubBigQuery()).answer(
+                "Prefiero respuestas breves", session_store=store, session_id=session_id
+            )
+            self.assertIn("activada", " ".join(result.learning_updates))
+            self.assertIn("resumir los datos", store.learning_context("preguntas analíticas"))
+            self.assertEqual(37, result.usage["total_tokens"])
 
 
 if __name__ == "__main__":

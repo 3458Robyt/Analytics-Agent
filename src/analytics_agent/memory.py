@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import getpass
 import json
+import math
 import os
 import re
 import sqlite3
@@ -96,8 +97,31 @@ class SessionStore:
                 created_at TEXT NOT NULL,
                 UNIQUE(turn_id, sequence)
             );
+            CREATE TABLE IF NOT EXISTS learnings (
+                learning_id TEXT PRIMARY KEY,
+                owner TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                learning_key TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                trigger_text TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL,
+                confidence REAL NOT NULL DEFAULT 0,
+                disable_reason TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS learning_evidence (
+                learning_id TEXT NOT NULL REFERENCES learnings(learning_id) ON DELETE CASCADE,
+                turn_id TEXT NOT NULL REFERENCES turns(turn_id) ON DELETE CASCADE,
+                verified INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(learning_id, turn_id)
+            );
             CREATE INDEX IF NOT EXISTS turns_session_idx ON turns(session_id, turn_number);
             CREATE INDEX IF NOT EXISTS actions_turn_idx ON actions(turn_id, sequence);
+            CREATE INDEX IF NOT EXISTS learnings_owner_status_idx ON learnings(owner, status, kind);
+            CREATE INDEX IF NOT EXISTS learning_evidence_turn_idx ON learning_evidence(turn_id);
             """
         )
         try:
@@ -276,6 +300,258 @@ class SessionStore:
             + (f"\nSQL anterior:\n{row['sql_text'][:1500]}" if row["sql_text"] else "")
             for row in rows
         )
+
+    @staticmethod
+    def _contains_secret(value: str) -> bool:
+        return bool(re.search(
+            r"(?i)(?:\bsk-[a-z0-9_-]{16,}\b|api[_ -]?key\s*[:=]|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)",
+            value,
+        ))
+
+    @staticmethod
+    def _contains_policy_override(value: str) -> bool:
+        return bool(re.search(
+            r"(?i)(?:\b(?:ignore|ignora|ignorar|bypass|omitir)\b.{0,60}\b(?:reglas|instrucciones|seguridad|guardrails|system|prompt|permisos|validaciones)\b|"
+            r"\b(?:elimina|eliminar|borra|borrar|actualiza|actualizar)\b.{0,60}\b(?:tabla|datos|recursos)\b|"
+            r"\b(?:revela|revelar|envía|envia|manda|publica)\b.{0,60}\b(?:clave|token|secreto|credencial)\b)",
+            value,
+        ))
+
+    def apply_learning_review(
+        self,
+        turn_id: str,
+        review: Mapping[str, Any],
+        *,
+        verified: bool,
+    ) -> list[str]:
+        """Persist bounded learnings with provenance and conservative promotion rules."""
+        updates: list[str] = []
+        explicit_correction = review.get("user_correction_detected", False) is True
+        invalidations = review.get("invalidates", [])
+        if explicit_correction and isinstance(invalidations, list):
+            for item in invalidations:
+                if not isinstance(item, Mapping):
+                    continue
+                key = str(item.get("key", "")).strip().lower()
+                reason = " ".join(str(item.get("reason", "Corrección del usuario")).split())[:300]
+                if not re.fullmatch(r"[a-z][a-z0-9_]{1,79}", key):
+                    continue
+                cursor = self.connection.execute(
+                    """UPDATE learnings SET status = 'disabled', disable_reason = ?, updated_at = ?
+                       WHERE owner = ? AND learning_key = ? AND status = 'active'""",
+                    (reason, _utc_now(), self.owner, key),
+                )
+                if cursor.rowcount:
+                    updates.append(f"Enseñanza desactivada: {key}")
+
+        categories = (
+            ("preferences", "preference"),
+            ("procedures", "procedure"),
+            ("business_proposals", "business_proposal"),
+        )
+        for field, kind in categories:
+            records = review.get(field, [])
+            if not isinstance(records, list):
+                continue
+            for item in records[:8]:
+                if not isinstance(item, Mapping):
+                    continue
+                key = str(item.get("key", "")).strip().lower()
+                title = " ".join(str(item.get("title", "")).split())[:160]
+                content = " ".join(str(item.get("content", "")).split())[:1800]
+                trigger = " ".join(str(item.get("trigger", "")).split())[:300]
+                try:
+                    confidence_value = float(item.get("confidence", 0))
+                    confidence = min(1.0, max(0.0, confidence_value)) if math.isfinite(confidence_value) else 0.0
+                except (TypeError, ValueError):
+                    confidence = 0.0
+                if not re.fullmatch(r"[a-z][a-z0-9_]{1,79}", key) or not title or not content:
+                    continue
+                learning_text = " ".join((title, content, trigger))
+                if self._contains_secret(learning_text) or self._contains_policy_override(learning_text):
+                    continue
+                if kind == "procedure" and not verified:
+                    continue
+                now = _utc_now()
+                explicit_preference = kind == "preference" and item.get("explicit_user_statement", False) is True and confidence >= 0.8
+                if explicit_preference:
+                    self.connection.execute(
+                        """UPDATE learnings SET status = 'disabled',
+                                  disable_reason = 'Reemplazado por una declaración explícita posterior',
+                                  updated_at = ?
+                           WHERE owner = ? AND kind = 'preference' AND learning_key = ?
+                             AND content <> ? AND status = 'active'""",
+                        (now, self.owner, key, content),
+                    )
+
+                existing = self.connection.execute(
+                    """SELECT * FROM learnings WHERE owner = ? AND kind = ?
+                       AND learning_key = ? AND content = ?""",
+                    (self.owner, kind, key, content),
+                ).fetchone()
+                if existing is None:
+                    learning_id = uuid.uuid4().hex
+                    status = "proposed" if kind == "business_proposal" else "candidate"
+                    self.connection.execute(
+                        """INSERT INTO learnings(learning_id, owner, kind, learning_key, title, content,
+                           trigger_text, status, confidence, created_at, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (learning_id, self.owner, kind, key, title, content, trigger, status,
+                         confidence, now, now),
+                    )
+                else:
+                    learning_id = str(existing["learning_id"])
+                    # Manually disabled learnings stay disabled until restored by an explicit future command.
+                    if existing["status"] == "disabled":
+                        continue
+                    self.connection.execute(
+                        "UPDATE learnings SET confidence = MAX(confidence, ?), updated_at = ? WHERE learning_id = ?",
+                        (confidence, now, learning_id),
+                    )
+
+                is_verified_evidence = int(kind == "procedure" and verified)
+                self.connection.execute(
+                    """INSERT OR IGNORE INTO learning_evidence(learning_id, turn_id, verified, created_at)
+                       VALUES (?, ?, ?, ?)""",
+                    (learning_id, turn_id, is_verified_evidence, now),
+                )
+                evidence = self.connection.execute(
+                    "SELECT COUNT(*) AS n, SUM(verified) AS verified_n FROM learning_evidence WHERE learning_id = ?",
+                    (learning_id,),
+                ).fetchone()
+                evidence_count = int(evidence["n"] or 0)
+                verified_count = int(evidence["verified_n"] or 0)
+                if kind == "preference":
+                    if explicit_preference or evidence_count >= 2 and confidence >= 0.75:
+                        new_status = "active"
+                    else:
+                        new_status = "candidate"
+                elif kind == "procedure":
+                    new_status = "active" if verified_count >= 2 else "candidate"
+                else:
+                    new_status = "proposed"
+                previous_status = str(existing["status"]) if existing is not None else ""
+                if new_status == "active":
+                    superseded = self.connection.execute(
+                        """UPDATE learnings SET status = 'disabled',
+                                  disable_reason = 'Reemplazado por una enseñanza más reciente con la misma clave',
+                                  updated_at = ?
+                           WHERE owner = ? AND kind = ? AND learning_key = ?
+                             AND content <> ? AND status = 'active'""",
+                        (now, self.owner, kind, key, content),
+                    )
+                    if superseded.rowcount:
+                        updates.append(f"Enseñanza anterior reemplazada: {key}")
+                self.connection.execute(
+                    "UPDATE learnings SET status = ?, updated_at = ? WHERE learning_id = ?",
+                    (new_status, now, learning_id),
+                )
+                if new_status == "active" and previous_status != "active":
+                    updates.append(f"Enseñanza activada: {title}")
+                elif new_status == "candidate" and evidence_count == 1:
+                    updates.append(f"Enseñanza en observación: {title}")
+                elif new_status == "proposed" and kind == "business_proposal" and evidence_count == 1:
+                    updates.append(f"Propuesta de definición pendiente: {title}")
+        self.connection.commit()
+        return list(dict.fromkeys(updates))
+
+    def learning_context(self, query: str = "", *, limit: int = 8) -> str:
+        """Return only active, relevant personal preferences and procedures."""
+        tokens = re.findall(r"[\wÀ-ÿ]+", query.lower(), flags=re.UNICODE)[:16]
+        rows = self.connection.execute(
+            """SELECT learning_key, kind, title, content, trigger_text, updated_at FROM learnings
+               WHERE owner = ? AND status = 'active' AND kind IN ('preference', 'procedure')
+               ORDER BY updated_at DESC LIMIT 200""",
+            (self.owner,),
+        ).fetchall()
+        selected: list[tuple[int, sqlite3.Row]] = []
+        for row in rows:
+            searchable = " ".join((row["learning_key"], row["title"], row["content"], row["trigger_text"])).lower()
+            score = sum(1 for token in tokens if len(token) > 2 and token in searchable)
+            if row["kind"] == "preference":
+                selected.append((score + 100, row))
+            elif not tokens or score:
+                selected.append((score, row))
+        selected.sort(key=lambda pair: (pair[0], pair[1]["updated_at"]), reverse=True)
+        return "\n".join(
+            f"[{row['kind']} · {row['learning_key']}] {row['title']}: {row['content']}"
+            + (f" (aplica cuando: {row['trigger_text']})" if row["trigger_text"] else "")
+            for _, row in selected[:limit]
+        )
+
+    def search_learning(self, query: str, *, limit: int = 8) -> list[dict[str, Any]]:
+        tokens = re.findall(r"[\wÀ-ÿ]+", query.lower(), flags=re.UNICODE)[:16]
+        if not tokens:
+            return []
+        rows = self.connection.execute(
+            """SELECT learning_id, kind, learning_key, title, content, trigger_text, status,
+                      confidence, disable_reason, updated_at FROM learnings
+               WHERE owner = ? ORDER BY updated_at DESC LIMIT 500""",
+            (self.owner,),
+        ).fetchall()
+        matches = []
+        for row in rows:
+            searchable = " ".join((row["learning_key"], row["title"], row["content"], row["trigger_text"])).lower()
+            score = sum(1 for token in tokens if len(token) > 2 and token in searchable)
+            if score:
+                matches.append((score, dict(row)))
+        matches.sort(key=lambda pair: (pair[0], pair[1]["updated_at"]), reverse=True)
+        return [record for _, record in matches[:limit]]
+
+    def list_learning(self, *, status: str = "", limit: int = 100) -> list[dict[str, Any]]:
+        if status and status not in {"candidate", "active", "proposed", "disabled"}:
+            raise ValueError("Estado de aprendizaje desconocido")
+        sql = """SELECT l.learning_id, l.kind, l.learning_key, l.title, l.content,
+                        l.trigger_text, l.status, l.confidence, l.disable_reason, l.updated_at,
+                        COUNT(e.turn_id) AS evidence_count,
+                        COALESCE(SUM(e.verified), 0) AS verified_evidence_count
+                 FROM learnings l LEFT JOIN learning_evidence e USING(learning_id)
+                 WHERE l.owner = ?"""
+        params: list[Any] = [self.owner]
+        if status:
+            sql += " AND l.status = ?"
+            params.append(status)
+        sql += " GROUP BY l.learning_id ORDER BY l.updated_at DESC LIMIT ?"
+        params.append(limit)
+        return [dict(row) for row in self.connection.execute(sql, params).fetchall()]
+
+    def get_learning(self, learning_id: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            """SELECT learning_id, kind, learning_key, title, content, trigger_text, status,
+                      confidence, disable_reason, created_at, updated_at FROM learnings
+               WHERE learning_id = ? AND owner = ?""",
+            (learning_id, self.owner),
+        ).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["evidence"] = [dict(evidence) for evidence in self.connection.execute(
+            """SELECT turn_id, verified, created_at FROM learning_evidence
+               WHERE learning_id = ? ORDER BY created_at""",
+            (learning_id,),
+        ).fetchall()]
+        return item
+
+    def disable_learning(self, learning_id: str, reason: str = "Desactivado por el usuario") -> bool:
+        cursor = self.connection.execute(
+            """UPDATE learnings SET status = 'disabled', disable_reason = ?, updated_at = ?
+               WHERE learning_id = ? AND owner = ? AND status <> 'disabled'""",
+            (" ".join(reason.split())[:300], _utc_now(), learning_id, self.owner),
+        )
+        self.connection.commit()
+        return cursor.rowcount > 0
+
+    def enable_learning(self, learning_id: str) -> bool:
+        """Restore a deliberately selected item; business definitions remain proposals."""
+        cursor = self.connection.execute(
+            """UPDATE learnings SET status = CASE WHEN kind = 'business_proposal'
+                                                 THEN 'proposed' ELSE 'active' END,
+                                  disable_reason = '', updated_at = ?
+               WHERE learning_id = ? AND owner = ? AND status = 'disabled'""",
+            (_utc_now(), learning_id, self.owner),
+        )
+        self.connection.commit()
+        return cursor.rowcount > 0
 
     def list_sessions(self, *, limit: int = 20) -> list[dict[str, Any]]:
         rows = self.connection.execute(

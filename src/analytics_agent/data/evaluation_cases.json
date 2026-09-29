@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "prima_s1_por_ramo",
+      "question": "Calcula la prima emitida por ramo para el primer semestre de 2026 e incluye todos los movimientos.",
+      "table_id": "centralizacion-datos.analytics_curated.th_primas_final",
+      "required_sql_fragments": [
+        "SUM(vrprima)",
+        "fecha_emision",
+        "nombre_ramo_comercial",
+        "2026-01-01",
+        "2026-07-01"
+      ],
+      "forbidden_sql_fragments": ["COUNT(DISTINCT", "LIMIT"],
+      "result_columns": ["ramo", "prima_emitida"],
+      "result_rows": [
+        {"ramo": "AUTOS", "prima_emitida": 125000.0},
+        {"ramo": "VIDA", "prima_emitida": 98500.0}
+      ],
+      "expect_detail_rows": false
+    },
+    {
+      "id": "detalle_paginado",
+      "question": "Muestra el detalle completo de las primas emitidas durante enero de 2026, registro por registro, con fecha, ramo y valor.",
+      "table_id": "centralizacion-datos.analytics_curated.th_primas_final",
+      "required_sql_fragments": ["fecha_emision", "nombre_ramo_comercial", "vrprima", "2026-01-01", "2026-02-01"],
+      "forbidden_sql_fragments": ["LIMIT", "SUM("],
+      "result_columns": ["fecha_emision", "ramo", "vrprima"],
+      "result_rows": [
+        {"fecha_emision": "2026-01-04", "ramo": "AUTOS", "vrprima": 1500.0},
+        {"fecha_emision": "2026-01-18", "ramo": "VIDA", "vrprima": 2200.0},
+        {"fecha_emision": "2026-01-29", "ramo": "AUTOS", "vrprima": 1800.0}
+      ],
+      "expect_detail_rows": true
+    }
+  ]
+}

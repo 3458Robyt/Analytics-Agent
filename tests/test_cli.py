@@ -3,7 +3,7 @@ from io import StringIO
 
 from rich.console import Console
 
-from analytics_agent.cli import _as_bool, _format_cell, _render_answer
+from analytics_agent.cli import _as_bool, _build_parser, _format_cell, _render_answer
 from analytics_agent.models import AgentAnswer, SummaryTable
 
 
@@ -26,6 +26,7 @@ class CliFormattingTests(unittest.TestCase):
         answer = AgentAnswer(
             answer="El total fue **1,234.50**.",
             assumptions=("Se incluyeron todos los movimientos.",),
+            learning_updates=("Enseñanza activada: Respuestas breves",),
             summary_table=SummaryTable(
                 title="Prima por ramo",
                 columns=("ramo", "prima"),
@@ -41,6 +42,18 @@ class CliFormattingTests(unittest.TestCase):
         self.assertIn("AUTOMÓVILES", rendered)
         self.assertIn("1,234.50", rendered)
         self.assertIn("Supuestos", rendered)
+        self.assertIn("Aprendizaje actualizado", rendered)
+
+    def test_learning_cli_filter(self):
+        args = _build_parser().parse_args(["learn", "list", "--status", "proposed"])
+        self.assertEqual("learn", args.command)
+        self.assertEqual("list", args.learning_action)
+        self.assertEqual("proposed", args.status)
+        enable_args = _build_parser().parse_args(["learn", "enable", "abcd"])
+        self.assertEqual("enable", enable_args.learning_action)
+        evaluation_args = _build_parser().parse_args(["evaluate", "--candidate-prompt", "/tmp/prompt.txt"])
+        self.assertEqual("evaluate", evaluation_args.command)
+        self.assertEqual("/tmp/prompt.txt", evaluation_args.candidate_prompt)
 
 
 if __name__ == "__main__":

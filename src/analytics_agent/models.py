@@ -64,3 +64,4 @@ class AgentAnswer:
     usage: dict[str, int] = field(default_factory=dict)
     session_id: str = ""
     query_jobs: tuple[dict[str, str], ...] = ()
+    learning_updates: tuple[str, ...] = ()

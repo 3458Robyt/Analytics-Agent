@@ -130,6 +130,65 @@ class LLMProviderTests(unittest.TestCase):
         self.assertEqual(5, usage["total_tokens"])
         self.assertIn("run_select", provider.messages[1]["content"])
 
+    def test_accepts_memory_search_action(self):
+        class StubProvider(OpenAICompatibleProvider):
+            def complete(self, messages, *, max_tokens=1200):
+                self.messages = messages
+                return Completion(
+                    text='{"action":"search_memory","search_text":"prima por ramo"}',
+                    usage={"total_tokens": 2},
+                )
+
+        provider = StubProvider(base_url="https://llm.example/v1", model="m", api_key="k")
+        result, _ = provider.next_action("Consulta anterior de prima")
+        self.assertEqual("search_memory", result["action"])
+        self.assertEqual("prima por ramo", result["search_text"])
+        self.assertIn("search_memory", provider.messages[0]["content"])
+
+    def test_agent_prompt_override_is_used_for_comparison(self):
+        class StubProvider(OpenAICompatibleProvider):
+            def complete(self, messages, *, max_tokens=1200):
+                self.messages = messages
+                return Completion(
+                    text='{"action":"finish","answer":"Evaluada"}',
+                    usage={"total_tokens": 1},
+                )
+
+        provider = StubProvider(
+            base_url="https://llm.example/v1", model="m", api_key="k",
+            agent_system_prompt="PROMPT CANDIDATO PARA EVALUACIÓN",
+        )
+        provider.next_action("pregunta")
+        self.assertEqual("PROMPT CANDIDATO PARA EVALUACIÓN", provider.messages[0]["content"])
+
+    def test_learning_review_returns_typed_candidate_lists(self):
+        class StubProvider(OpenAICompatibleProvider):
+            def complete(self, messages, *, max_tokens=1200):
+                self.messages = messages
+                return Completion(
+                    text=json.dumps({
+                        "user_correction_detected": True,
+                        "invalidates": [{"key": "old_rule", "reason": "Corrección"}],
+                        "preferences": [{
+                            "key": "short_answers", "title": "Respuestas breves",
+                            "content": "Preferir respuestas breves.", "trigger": "Respuestas generales",
+                            "confidence": 0.9, "explicit_user_statement": True,
+                        }],
+                        "procedures": [], "business_proposals": [],
+                    }),
+                    usage={"total_tokens": 8},
+                )
+
+        provider = StubProvider(base_url="https://llm.example/v1", model="m", api_key="k")
+        result, usage = provider.review_learning(
+            "Prefiero respuestas breves", prior_context="", plan={"metric": "prima"},
+            answer="De acuerdo", action_history=[], verified=False,
+        )
+        self.assertTrue(result["user_correction_detected"])
+        self.assertTrue(result["preferences"][0]["explicit_user_statement"])
+        self.assertEqual(8, usage["total_tokens"])
+        self.assertIn('"respuesta_verificada": false', provider.messages[1]["content"])
+
 
 if __name__ == "__main__":
     unittest.main()

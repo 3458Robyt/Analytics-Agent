@@ -82,6 +82,22 @@ analytics-agent sessions list
 # Inspecciona pregunta, respuesta, SQL y referencias de una sesión
 analytics-agent sessions show ID_SESION
 
+# Lista preferencias, procedimientos y propuestas de aprendizaje
+analytics-agent learn list
+
+# Revisa un aprendizaje o filtra las definiciones pendientes
+analytics-agent learn show ID_APRENDIZAJE
+analytics-agent learn list --status proposed
+
+# Desactiva una enseñanza incorrecta
+analytics-agent learn disable ID_APRENDIZAJE
+
+# Reactiva una preferencia o procedimiento desactivado
+analytics-agent learn enable ID_APRENDIZAJE
+
+# Compara un prompt candidato con el actual sin ejecutar consultas reales
+analytics-agent evaluate --candidate-prompt /ruta/al/prompt-candidato.txt
+
 # Reanuda una conversación en la CLI
 analytics-agent chat --resume ID_SESION
 ```
@@ -94,7 +110,11 @@ La CLI guarda automáticamente sesiones, preguntas, respuestas, SQL, resultados 
 
 La memoria pertenece a la cuenta de sistema que ejecuta la CLI. En la POC, ejecuta siempre desde la misma cuenta de Workbench para conservar el historial. Esta separación local no autentica usuarios que compartan una cuenta de sistema.
 
-El glosario compartido, versionado junto al código, está en `src/analytics_agent/data/business_glossary.json`. Solo sus entradas marcadas como validadas se entregan al modelo; el agente no las edita. Las definiciones nuevas se agregan mediante cambios revisados en Git.
+El prompt principal versionado se encuentra en `src/analytics_agent/prompts/agent_system_v1.txt`. `analytics-agent evaluate` ejecuta la batería local con ese prompt y con el archivo candidato, usando BigQuery simulado; el comando no cambia el prompt vigente. La evaluación sí llama al proveedor de IA para medir el comportamiento real del modelo, por lo que consume tokens.
+
+El glosario compartido, versionado junto al código, está en `src/analytics_agent/data/business_glossary.json`. Solo sus entradas marcadas como validadas se entregan al modelo; el agente no las edita. Las definiciones nuevas quedan como propuestas locales hasta que se revisen y agreguen mediante cambios en Git.
+
+Después de una respuesta, el agente analiza si el usuario expresó una preferencia o corrección y si el flujo produjo un procedimiento técnico que convenga repetir. Una declaración explícita puede entrar en vigor en la siguiente sesión; los procedimientos requieren dos usos distintos con consulta completada y respuesta revisada. Las definiciones de negocio siempre quedan pendientes. El aprendizaje no cambia prompts ni código por sí mismo. Al final de una respuesta, la CLI muestra qué se guardó; `analytics-agent learn list`, `show`, `disable` y `enable` permiten inspeccionarlo y corregirlo. Las filas detalladas no se envían al curador ni se guardan como evidencia. El curador hace una llamada adicional al proveedor por cada respuesta persistida, lo que añade algo de latencia y consumo de tokens.
 
 Antes de responder, el agente registra un plan de análisis, conserva la secuencia de herramientas, contrasta la tabla resumen con las filas agregadas consultadas y llama al modelo revisor para buscar diferencias de periodo, filtros, unidad y evidencia. El revisor puede hacer que el agente vuelva a consultar; después de dos intentos la respuesta indica los puntos que quedaron sin confirmar.
 
