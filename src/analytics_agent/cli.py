@@ -16,6 +16,7 @@ from urllib.parse import unquote, urlsplit
 
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -100,7 +101,13 @@ def _download_gcs_object(uri: str, destination: Path) -> Path:
     try:
         storage.Client().bucket(parsed.netloc).blob(object_name).download_to_filename(str(destination))
     except Exception as exc:
-        raise DictionaryError(f"No se pudo descargar el diccionario desde GCS ({type(exc).__name__})") from exc
+        detail = " ".join(str(exc).split())
+        if len(detail) > 300:
+            detail = detail[:297] + "..."
+        reason = f": {detail}" if detail else ""
+        raise DictionaryError(
+            f"No se pudo descargar el diccionario desde GCS ({type(exc).__name__}{reason})"
+        ) from exc
     return destination
 
 
@@ -113,14 +120,34 @@ def _load_catalog(config: RuntimeConfig, console: Console) -> SchemaCatalog:
             workbook = Path(tempfile.gettempdir()) / "analytics_agent_dictionary.xlsx"
             _download_gcs_object(config.workbook_gcs_uri, workbook)
         else:
+            console.print(
+                "[dim]Diccionario no configurado; usaré el esquema de BigQuery y las tablas conocidas.[/dim]",
+                highlight=False,
+            )
             return catalog
         catalog = load_dictionary(workbook)
+        table_count = len(catalog.tables)
+        column_count = sum(len(table.columns) for table in catalog.tables.values())
+        description_count = sum(
+            bool(column.description.strip())
+            for table in catalog.tables.values()
+            for column in table.columns.values()
+        )
+        console.print(
+            f"[green]Diccionario cargado:[/green] {table_count} tablas, {column_count} columnas, "
+            f"{description_count} descripciones.",
+            highlight=False,
+        )
         for warning in catalog.warnings:
             console.print(f"[yellow]Aviso del diccionario:[/yellow] {warning}", highlight=False)
     except Exception as exc:
+        detail = " ".join(str(exc).split()).replace("`", "'")
+        if len(detail) > 400:
+            detail = detail[:397] + "..."
+        reason = f" · {detail}" if detail else ""
         console.print(
             "[yellow]No se pudo cargar el diccionario; continuaré con las tablas conocidas y SQL directo:[/yellow] "
-            f"{type(exc).__name__}",
+            + escape(f"{type(exc).__name__}{reason}"),
             highlight=False,
         )
     return catalog
