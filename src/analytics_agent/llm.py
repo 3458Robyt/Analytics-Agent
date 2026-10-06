@@ -147,7 +147,7 @@ class OpenAICompatibleProvider:
             if decoded.get("status") == "incomplete":
                 raise LLMError("El endpoint de IA devolvió una respuesta incompleta")
             output_text = decoded.get("output_text")
-            if isinstance(output_text, str):
+            if isinstance(output_text, str) and output_text.strip():
                 text = output_text
             else:
                 text_parts = []
@@ -195,15 +195,22 @@ class OpenAICompatibleProvider:
         max_tokens: int,
         source: str,
     ) -> tuple[dict[str, Any], Mapping[str, int]]:
-        """Request JSON using only prompt instructions, retrying once if it is malformed."""
-        completion = self.complete(messages, max_tokens=max_tokens)
+        """Request JSON, retrying once if the response is empty or malformed."""
+        completion: Completion | None = None
         try:
+            completion = self.complete(messages, max_tokens=max_tokens)
             result = _parse_json_object(completion.text, source=source)
             return result, completion.usage
-        except LLMError:
+        except LLMError as first_error:
+            if (
+                completion is None
+                and str(first_error) != "El endpoint de IA no devolvió texto utilizable"
+            ):
+                raise
+
             retry_messages = [dict(message) for message in messages]
             retry_note = (
-                "La respuesta anterior no era un objeto JSON válido. Repite la misma tarea y devuelve "
+                "La respuesta anterior estaba vacía o no era un objeto JSON válido. Repite la misma tarea y devuelve "
                 "exclusivamente un objeto JSON válido, sin Markdown, comentarios ni texto adicional."
             )
             system_index = next(
@@ -223,10 +230,10 @@ class OpenAICompatibleProvider:
             except LLMError as retry_error:
                 raise LLMError(f"{source} no devolvió JSON válido tras dos intentos") from retry_error
 
-            usage = {
-                key: int(completion.usage.get(key, 0) or 0) + int(retry.usage.get(key, 0) or 0)
-                for key in {**completion.usage, **retry.usage}
-            }
+            usage = dict(retry.usage)
+            if completion is not None:
+                for key, value in completion.usage.items():
+                    usage[key] = int(usage.get(key, 0) or 0) + int(value or 0)
             return result, usage
 
     def next_action(
@@ -328,8 +335,13 @@ class OpenAICompatibleProvider:
             if not isinstance(result["assumptions"], list) or not all(isinstance(item, str) for item in result["assumptions"]):
                 raise LLMError("`assumptions` debe ser una lista de textos")
             table = result["summary_table"]
-            if table is not None and not isinstance(table, dict):
-                raise LLMError("`summary_table` debe ser un objeto o null")
+            # BigQuery rows are rendered by Python; malformed model tables do
+            # not invalidate a successful query or replace its evidence.
+            result["summary_table"] = (
+                {"title": table["title"]}
+                if isinstance(table, dict) and isinstance(table.get("title"), str)
+                else None
+            )
             if not isinstance(result["present_rows"], bool):
                 raise LLMError("`present_rows` debe ser booleano")
         return result, usage
