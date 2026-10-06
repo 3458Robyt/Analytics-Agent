@@ -83,10 +83,16 @@ class LearningStubLLM(ReviewingStubLLM):
 class StubBigQuery:
     location = ""
 
-    def __init__(self, *, dry_run_ok=True):
+    def __init__(self, *, dry_run_ok=True, rows=None, columns=("ramo", "prima"), column_types=None):
         self.dry_run_ok = dry_run_ok
         self.executions = 0
         self.pages_read = 0
+        self.rows = list(rows) if rows is not None else [
+            {"ramo": "AUTO", "prima": 100}, {"ramo": "VIDA", "prima": 200},
+        ]
+        self.columns = tuple(columns)
+        self.column_types = dict(column_types or {})
+        self.sql = []
 
     def inspect_table_metadata(self, table_id):
         catalog = sample_catalog().tables[TABLE_ID.lower()]
@@ -103,18 +109,21 @@ class StubBigQuery:
         }
 
     def dry_run(self, sql, *, location=""):
+        self.sql.append(sql)
         return DryRunResult(self.dry_run_ok, 2048, "No se pudo validar" if not self.dry_run_ok else "")
 
     def execute(self, sql, *, location=""):
         self.executions += 1
         return QueryPage(
-            "query-1", ("ramo", "prima"), ({"ramo": "AUTO", "prima": 100},), True, 2, 4096
+            "query-1", self.columns, tuple(self.rows[:1]), len(self.rows) > 1, len(self.rows), 4096,
+            column_types=self.column_types,
         )
 
     def read_page(self, query_id):
         self.pages_read += 1
         return QueryPage(
-            query_id, ("ramo", "prima"), ({"ramo": "VIDA", "prima": 200},), False, 2, 4096
+            query_id, self.columns, tuple(self.rows[1:]), False, len(self.rows), 4096,
+            column_types=self.column_types,
         )
 
 
@@ -143,7 +152,7 @@ class AgentLoopTests(unittest.TestCase):
         result = make_agent(llm, bq).answer("Prima por ramo")
         self.assertEqual(1, bq.executions, result.answer)
         self.assertEqual(1, bq.pages_read)
-        self.assertEqual("VIDA tuvo la prima mayor, con 200.", result.answer)
+        self.assertEqual("El mayor valor de **prima** corresponde a **ramo: VIDA**, con **200**.", result.answer)
         self.assertEqual(1, result.query_count)
         self.assertEqual(4096, result.bytes_processed)
         self.assertNotIn("rows", result.__dict__)
@@ -169,13 +178,34 @@ class AgentLoopTests(unittest.TestCase):
         self.assertEqual(0, bq.executions)
         self.assertEqual("BigQuery no permitió validar la consulta.", result.answer)
 
+    def test_empty_bigquery_result_does_not_reuse_model_claims(self):
+        llm = StubLLM([
+            action("run_select", sql=SQL),
+            action("finish", answer="El total fue 999 para enero de 2026."),
+        ])
+        result = make_agent(llm, StubBigQuery(rows=[])).answer("Prima por ramo")
+        self.assertEqual("BigQuery no devolvió filas para el criterio consultado.", result.answer)
+        self.assertIsNone(result.summary_table)
+
     def test_repeat_with_identical_result_stops_loop(self):
         llm = StubLLM([
             action("search_tables", search_text="prima"),
             action("search_tables", search_text="prima"),
         ])
         result = make_agent(llm, StubBigQuery()).answer("Busca primas")
-        self.assertIn("quedó incompleto", result.answer)
+        self.assertIn("repitió exactamente la misma acción", result.answer)
+
+    def test_repeated_identical_sql_is_not_submitted_to_bigquery_twice(self):
+        llm = StubLLM([
+            action("run_select", sql=SQL),
+            action("run_select", sql=SQL),
+        ])
+        bq = StubBigQuery()
+        result = make_agent(llm, bq).answer("Prima por ramo")
+        self.assertEqual(1, bq.executions)
+        self.assertEqual(1, result.query_count)
+        self.assertEqual(2, len(result.summary_table.rows))
+        self.assertIn("200", result.answer)
 
     def test_mutating_sql_is_rejected_before_dry_run(self):
         llm = StubLLM([
@@ -200,7 +230,7 @@ class AgentLoopTests(unittest.TestCase):
         self.assertEqual("AUTO", result.detail_table.rows[0]["ramo"])
         self.assertEqual("VIDA", result.detail_table.rows[1]["ramo"])
 
-    def test_table_mismatch_triggers_revision_and_retry(self):
+    def test_model_cannot_replace_bigquery_rows_and_custom_query_is_reviewed_once(self):
         llm = ReviewingStubLLM([
             action("run_select", sql=SQL),
             action("read_page", query_id="query-1"),
@@ -212,10 +242,25 @@ class AgentLoopTests(unittest.TestCase):
             }),
         ])
         result = make_agent(llm, StubBigQuery()).answer("Prima por ramo")
-        self.assertEqual(2, len(llm.reviews))
-        self.assertIn("no coincide", " ".join(llm.reviews[0]["deterministic_issues"]))
+        self.assertEqual(1, len(llm.reviews))
+        self.assertEqual([], llm.reviews[0]["deterministic_issues"])
         self.assertEqual(2, len(result.summary_table.rows))
-        self.assertNotIn("Revisión:", result.answer)
+        self.assertEqual("VIDA", result.summary_table.rows[1]["ramo"])
+        self.assertIn("200", result.answer)
+
+    def test_model_cannot_hide_numeric_evidence_from_summary_table(self):
+        summary = AnalyticsAgent._summary_from_evidence(
+            {"title": "Totales", "columns": ["ramo"], "rows": []},
+            {"query-1": {
+                "columns": ["ramo", "prima"],
+                "column_types": {"ramo": "STRING", "prima": "NUMERIC"},
+                "rows": [{"ramo": "AUTO", "prima": "100.25"}],
+            }},
+            {"query-1"},
+        )
+        self.assertEqual(("ramo", "prima"), summary.columns)
+        self.assertEqual(("prima",), summary.numeric_columns)
+        self.assertEqual("100.25", summary.rows[0]["prima"])
 
     def test_search_memory_action_reads_past_turns(self):
         llm = StubLLM([
@@ -233,16 +278,97 @@ class AgentLoopTests(unittest.TestCase):
             self.assertIn("contexto anterior", result.answer)
             self.assertIn("prima emitida", str(llm.calls[-1][1]["last_tool_result"]).lower())
 
-    def test_learning_review_runs_after_answer_and_persists_explicit_preference(self):
+    def test_learning_review_is_queued_after_answer_and_can_be_processed_separately(self):
         llm = LearningStubLLM([action("finish", answer="Respuesta directa.")])
         with tempfile.TemporaryDirectory() as directory, SessionStore(directory, owner="user:1") as store:
             session_id = store.create_session("Pregunta")
             result = make_agent(llm, StubBigQuery()).answer(
                 "Prefiero respuestas breves", session_store=store, session_id=session_id
             )
-            self.assertIn("activada", " ".join(result.learning_updates))
+            self.assertIn("segundo plano", " ".join(result.learning_updates))
+            self.assertEqual(2, len(llm.calls))  # Plan y respuesta; curación fuera de la ruta crítica.
+            job = store.claim_learning_review()
+            self.assertIsNotNone(job)
+            turn_id, payload = job
+            review, _usage = llm.review_learning(
+                payload["question"], prior_context=payload["prior_context"], plan=payload["plan"],
+                answer=payload["answer"], action_history=payload["action_history"],
+                verified=payload["verified"], active_learnings=payload["active_learnings"],
+            )
+            store.apply_learning_review(turn_id, review, verified=payload["verified"])
+            store.finish_learning_review(turn_id)
             self.assertIn("resumir los datos", store.learning_context("preguntas analíticas"))
-            self.assertEqual(37, result.usage["total_tokens"])
+            self.assertEqual("complete", store.connection.execute(
+                "SELECT status FROM learning_queue WHERE turn_id = ?", (turn_id,)
+            ).fetchone()["status"])
+
+    def test_confirmed_metric_compiles_sql_and_skips_llm_reviewer(self):
+        llm = ReviewingStubLLM([
+            action("run_metric", metric_key="prima_emitida", start_date="2026-01-01",
+                   end_date="2026-02-01", group_by=["nombre_ramo_comercial"]),
+            action("finish", answer="La prima quedó consultada."),
+        ])
+        rows = [{"ramo": f"RAMO {index:03d}", "prima_emitida": index * 10} for index in range(75)]
+        bq = StubBigQuery(
+            rows=rows, columns=("ramo", "prima_emitida"),
+            column_types={"ramo": "STRING", "prima_emitida": "NUMERIC"},
+        )
+        result = make_agent(llm, bq).answer("Prima emitida por ramo en enero de 2026")
+        self.assertEqual(1, bq.executions)
+        self.assertIn("SUM(`vrprima`)", bq.sql[0])
+        self.assertIn("`fecha_emision` >= CAST('2026-01-01' AS DATE)", bq.sql[0])
+        self.assertEqual(75, len(result.summary_table.rows))
+        self.assertEqual([], llm.reviews)
+
+    def test_clarification_is_collected_in_the_same_turn_and_confirmed_definition_is_personal(self):
+        clarification = {
+            "question": "¿Incluyo todos los movimientos del periodo?",
+            "metric_key": "prima_emitida",
+            "proposed_rule": "Incluir todos los registros y movimientos del periodo, sin excluir endosos ni ajustes.",
+        }
+        llm = StubLLM([
+            action("clarify", clarification=clarification),
+            action("run_select", sql=SQL),
+            action("finish", answer="Resultado consultado."),
+        ])
+        with tempfile.TemporaryDirectory() as directory, SessionStore(directory, owner="user:1") as store:
+            session_id = store.create_session("Pregunta")
+            captured = []
+            result = make_agent(llm, StubBigQuery()).answer(
+                "Prima emitida por ramo en enero de 2026", session_store=store,
+                session_id=session_id,
+                on_clarification=lambda prompt: (captured.append(prompt.question) or "Cuenta todo"),
+            )
+            self.assertEqual([clarification["question"]], captured)
+            self.assertEqual("complete", result.status)
+            definitions = store.list_business_definitions()
+            self.assertEqual("prima_emitida", definitions[0]["metric_key"])
+            self.assertIn("confirmación personal", store.confirmed_business_definitions("prima emitida"))
+
+    def test_pending_clarification_can_resume_the_same_persisted_turn(self):
+        clarification = {
+            "question": "¿Qué campo de fecha debe delimitar el periodo?",
+            "metric_key": "incurrido_neto",
+            "proposed_rule": "Usar fecha_pago para delimitar el periodo de cálculo.",
+        }
+        with tempfile.TemporaryDirectory() as directory, SessionStore(directory, owner="user:1") as store:
+            session_id = store.create_session("Pregunta")
+            first = make_agent(StubLLM([action("clarify", clarification=clarification)]), StubBigQuery())
+            waiting = first.answer("Incurrido neto de enero", session_store=store, session_id=session_id)
+            self.assertEqual("needs_clarification", waiting.status)
+            self.assertEqual(waiting.turn_id, store.get_session(session_id)["turns"][0]["turn_id"])
+
+            resumed_agent = make_agent(StubLLM([
+                action("run_select", sql=SQL),
+                action("finish", answer="Resultado consultado."),
+            ]), StubBigQuery())
+            resumed = resumed_agent.answer(
+                "", session_store=store, pending_turn_id=waiting.turn_id,
+                clarification_response="Usa fecha_pago y suma neto",
+            )
+            self.assertEqual("complete", resumed.status)
+            self.assertEqual(waiting.turn_id, resumed.turn_id)
+            self.assertEqual("complete", store.get_session(session_id)["turns"][0]["status"])
 
 
 if __name__ == "__main__":

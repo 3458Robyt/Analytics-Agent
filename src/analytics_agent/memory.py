@@ -7,7 +7,7 @@ import os
 import re
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -82,6 +82,8 @@ class SessionStore:
                 answer TEXT NOT NULL DEFAULT '',
                 assumptions_json TEXT NOT NULL DEFAULT '[]',
                 summary_table_json TEXT NOT NULL DEFAULT 'null',
+                status TEXT NOT NULL DEFAULT 'running',
+                pending_clarification_json TEXT NOT NULL DEFAULT 'null',
                 created_at TEXT NOT NULL,
                 UNIQUE(session_id, turn_number)
             );
@@ -118,12 +120,49 @@ class SessionStore:
                 created_at TEXT NOT NULL,
                 PRIMARY KEY(learning_id, turn_id)
             );
+            CREATE TABLE IF NOT EXISTS learning_queue (
+                turn_id TEXT PRIMARY KEY REFERENCES turns(turn_id) ON DELETE CASCADE,
+                owner TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                last_error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS business_definitions (
+                owner TEXT NOT NULL,
+                metric_key TEXT NOT NULL,
+                proposed_rule TEXT NOT NULL,
+                clarification_question TEXT NOT NULL,
+                user_confirmation TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(owner, metric_key)
+            );
+            CREATE TABLE IF NOT EXISTS schema_cache (
+                owner TEXT NOT NULL,
+                table_id TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(owner, table_id)
+            );
             CREATE INDEX IF NOT EXISTS turns_session_idx ON turns(session_id, turn_number);
             CREATE INDEX IF NOT EXISTS actions_turn_idx ON actions(turn_id, sequence);
             CREATE INDEX IF NOT EXISTS learnings_owner_status_idx ON learnings(owner, status, kind);
             CREATE INDEX IF NOT EXISTS learning_evidence_turn_idx ON learning_evidence(turn_id);
+            CREATE INDEX IF NOT EXISTS learning_queue_owner_status_idx ON learning_queue(owner, status, created_at);
             """
         )
+        turn_columns = {
+            str(row["name"])
+            for row in self.connection.execute("PRAGMA table_info(turns)").fetchall()
+        }
+        if "status" not in turn_columns:
+            self.connection.execute("ALTER TABLE turns ADD COLUMN status TEXT NOT NULL DEFAULT 'complete'")
+        if "pending_clarification_json" not in turn_columns:
+            self.connection.execute(
+                "ALTER TABLE turns ADD COLUMN pending_clarification_json TEXT NOT NULL DEFAULT 'null'"
+            )
         try:
             self.connection.execute(
                 """CREATE VIRTUAL TABLE IF NOT EXISTS turns_fts USING fts5(
@@ -134,6 +173,162 @@ class SessionStore:
             self.fts_available = True
         except sqlite3.OperationalError:
             self.fts_available = False
+        self.connection.commit()
+
+    def queue_learning_review(
+        self,
+        turn_id: str,
+        *,
+        question: str,
+        prior_context: str,
+        plan: Mapping[str, Any],
+        answer: str,
+        action_history: Sequence[Mapping[str, Any]],
+        verified: bool,
+        active_learnings: str = "",
+    ) -> None:
+        """Persist extraction work so it can run after the answer is returned."""
+        payload = {
+            "question": question,
+            "prior_context": prior_context,
+            "plan": dict(plan),
+            "answer": answer,
+            "action_history": list(action_history),
+            "verified": bool(verified),
+            "active_learnings": active_learnings,
+        }
+        now = _utc_now()
+        self.connection.execute(
+            """INSERT INTO learning_queue(turn_id, owner, payload_json, status, created_at, updated_at)
+               VALUES (?, ?, ?, 'pending', ?, ?)
+               ON CONFLICT(turn_id) DO NOTHING""",
+            (turn_id, self.owner, json.dumps(payload, ensure_ascii=False, default=str), now, now),
+        )
+        self.connection.commit()
+
+    def claim_learning_review(self) -> tuple[str, dict[str, Any]] | None:
+        """Atomically claim one queued job; safe when ask/chat run concurrently."""
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            lease_expired = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(timespec="seconds")
+            row = self.connection.execute(
+                "SELECT turn_id, payload_json FROM learning_queue WHERE owner = ? AND "
+                "(status = 'pending' OR (status = 'processing' AND updated_at < ?)) ORDER BY created_at LIMIT 1",
+                (self.owner, lease_expired),
+            ).fetchone()
+            if row is None:
+                self.connection.commit()
+                return None
+            self.connection.execute(
+                "UPDATE learning_queue SET status = 'processing', updated_at = ?, last_error = '' "
+                "WHERE turn_id = ? AND owner = ?",
+                (_utc_now(), row["turn_id"], self.owner),
+            )
+            self.connection.commit()
+            return str(row["turn_id"]), json.loads(row["payload_json"])
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def finish_learning_review(self, turn_id: str, *, error: str = "") -> None:
+        status = "pending" if error else "complete"
+        self.connection.execute(
+            "UPDATE learning_queue SET status = ?, last_error = ?, updated_at = ? WHERE turn_id = ? AND owner = ?",
+            (status, " ".join(error.split())[:500], _utc_now(), turn_id, self.owner),
+        )
+        self.connection.commit()
+
+    def confirm_business_definition(
+        self,
+        metric_key: str,
+        proposed_rule: str,
+        clarification_question: str,
+        user_confirmation: str,
+    ) -> None:
+        metric_key = metric_key.strip().lower()
+        if not re.fullmatch(r"[a-z0-9_]{2,80}", metric_key):
+            raise ValueError("La clave de métrica confirmada no es válida")
+        proposed_rule = " ".join(proposed_rule.split())[:1200]
+        clarification_question = " ".join(clarification_question.split())[:600]
+        user_confirmation = " ".join(user_confirmation.split())[:1000]
+        if len(proposed_rule) < 12 or not user_confirmation:
+            raise ValueError("La definición requiere una regla concreta y confirmación del usuario")
+        self.connection.execute(
+            """INSERT INTO business_definitions(owner, metric_key, proposed_rule, clarification_question,
+               user_confirmation, status, updated_at) VALUES (?, ?, ?, ?, ?, 'active', ?)
+               ON CONFLICT(owner, metric_key) DO UPDATE SET proposed_rule = excluded.proposed_rule,
+               clarification_question = excluded.clarification_question,
+               user_confirmation = excluded.user_confirmation, status = 'active', updated_at = excluded.updated_at""",
+            (self.owner, metric_key, proposed_rule, clarification_question, user_confirmation, _utc_now()),
+        )
+        self.connection.commit()
+
+    def confirmed_business_definitions(self, query: str = "", *, limit: int = 8) -> str:
+        tokens = re.findall(r"[\wÀ-ÿ]+", query.lower(), flags=re.UNICODE)
+        rows = self.connection.execute(
+            "SELECT metric_key, proposed_rule, clarification_question, user_confirmation "
+            "FROM business_definitions WHERE owner = ? AND status = 'active' ORDER BY updated_at DESC LIMIT 100",
+            (self.owner,),
+        ).fetchall()
+        relevant = []
+        for row in rows:
+            text = " ".join((row["metric_key"], row["proposed_rule"], row["clarification_question"])).lower()
+            if not tokens or any(token in text for token in tokens if len(token) > 2):
+                relevant.append(row)
+        return "\n".join(
+            f"[{row['metric_key']} · confirmación personal del usuario] {row['proposed_rule']} "
+            f"(pregunta: {row['clarification_question']}; respuesta: {row['user_confirmation']})"
+            for row in relevant[:limit]
+        )
+
+    def list_business_definitions(self, *, status: str = "active") -> list[dict[str, Any]]:
+        return [dict(row) for row in self.connection.execute(
+            "SELECT metric_key, proposed_rule, clarification_question, user_confirmation, status, updated_at "
+            "FROM business_definitions WHERE owner = ? AND (? = '' OR status = ?) ORDER BY updated_at DESC",
+            (self.owner, status, status),
+        ).fetchall()]
+
+    def set_business_definition_status(self, metric_key: str, status: str) -> bool:
+        if status not in {"active", "disabled"}:
+            raise ValueError("Estado de definición desconocido")
+        cursor = self.connection.execute(
+            "UPDATE business_definitions SET status = ?, updated_at = ? WHERE owner = ? AND metric_key = ?",
+            (status, _utc_now(), self.owner, metric_key.strip().lower()),
+        )
+        self.connection.commit()
+        return cursor.rowcount > 0
+
+    def get_schema_metadata(self, table_id: str, *, max_age_seconds: int = 3600) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT metadata_json, updated_at FROM schema_cache WHERE owner = ? AND table_id = ?",
+            (self.owner, table_id.strip().lower()),
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            updated = datetime.fromisoformat(str(row["updated_at"]))
+            if (datetime.now(timezone.utc) - updated).total_seconds() > max_age_seconds:
+                return None
+            value = json.loads(row["metadata_json"])
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    def set_schema_metadata(self, table_id: str, metadata: Mapping[str, Any]) -> None:
+        self.connection.execute(
+            """INSERT INTO schema_cache(owner, table_id, metadata_json, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(owner, table_id) DO UPDATE SET metadata_json = excluded.metadata_json,
+               updated_at = excluded.updated_at""",
+            (self.owner, table_id.strip().lower(), json.dumps(metadata, ensure_ascii=False, default=str), _utc_now()),
+        )
+        self.connection.commit()
+
+    def invalidate_schema_metadata(self, table_id: str) -> None:
+        self.connection.execute(
+            "DELETE FROM schema_cache WHERE owner = ? AND table_id = ?",
+            (self.owner, table_id.strip().lower()),
+        )
         self.connection.commit()
 
     def create_session(self, title: str = "") -> str:
@@ -209,6 +404,43 @@ class SessionStore:
         )
         self.connection.commit()
 
+    def next_action_sequence(self, turn_id: str) -> int:
+        row = self.connection.execute(
+            "SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM actions WHERE turn_id = ?",
+            (turn_id,),
+        ).fetchone()
+        return int(row["next_sequence"])
+
+    def set_pending_clarification(self, turn_id: str, clarification: Mapping[str, Any]) -> None:
+        self.connection.execute(
+            "UPDATE turns SET status = 'needs_clarification', pending_clarification_json = ? WHERE turn_id = ?",
+            (json.dumps(dict(clarification), ensure_ascii=False), turn_id),
+        )
+        self.connection.commit()
+
+    def resume_pending_turn(self, turn_id: str, user_response: str) -> dict[str, Any]:
+        row = self.connection.execute(
+            """SELECT t.turn_id, t.session_id, t.question, t.status, t.pending_clarification_json
+               FROM turns t JOIN sessions s USING(session_id)
+               WHERE t.turn_id = ? AND s.owner = ?""",
+            (turn_id, self.owner),
+        ).fetchone()
+        if row is None or row["status"] != "needs_clarification":
+            raise ValueError("El turno no existe o no está esperando una aclaración")
+        clarification = json.loads(row["pending_clarification_json"] or "null") or {}
+        self.connection.execute(
+            "UPDATE turns SET status = 'running', pending_clarification_json = 'null' WHERE turn_id = ?",
+            (turn_id,),
+        )
+        self.connection.commit()
+        return {
+            "turn_id": str(row["turn_id"]),
+            "session_id": str(row["session_id"]),
+            "question": str(row["question"]),
+            "clarification": clarification,
+            "user_response": " ".join(user_response.split())[:2000],
+        }
+
     @staticmethod
     def _persistable_result(result: Mapping[str, Any], *, aggregate: bool) -> dict[str, Any]:
         """Keep all metadata and aggregate rows, but never persist raw detail rows."""
@@ -228,7 +460,8 @@ class SessionStore:
         summary_table: Mapping[str, Any] | None = None,
     ) -> None:
         self.connection.execute(
-            "UPDATE turns SET answer = ?, assumptions_json = ?, summary_table_json = ? WHERE turn_id = ?",
+            "UPDATE turns SET answer = ?, assumptions_json = ?, summary_table_json = ?, status = 'complete', "
+            "pending_clarification_json = 'null' WHERE turn_id = ?",
             (
                 answer,
                 json.dumps(list(assumptions), ensure_ascii=False),
@@ -576,6 +809,7 @@ class SessionStore:
             item = dict(turn)
             item["assumptions"] = json.loads(item.pop("assumptions_json"))
             item["summary_table"] = json.loads(item.pop("summary_table_json"))
+            item["pending_clarification"] = json.loads(item.pop("pending_clarification_json", "null") or "null")
             item["actions"] = [
                 {
                     **dict(action),

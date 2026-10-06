@@ -80,6 +80,22 @@ class DictionaryTests(unittest.TestCase):
         self.assertEqual(3, all_count)
         self.assertEqual(1, len(all_matches))
 
+    def test_prompt_keeps_all_column_names_but_prioritizes_relevant_descriptions(self):
+        table = TableSchema(
+            sheet_name="demo",
+            table_id="project.dataset.table",
+            columns={
+                "fecha_emision": ColumnSchema("fecha_emision", "DATE", "Fecha de emisión de la póliza."),
+                "vrprima": ColumnSchema("vrprima", "NUMERIC", "Valor de prima emitida."),
+                "documento": ColumnSchema("documento", "STRING", "Documento de identidad del cliente."),
+            },
+        )
+        prompt = SchemaCatalog(tables={table.table_id: table}).prompt_text(query="prima emitida")
+        self.assertIn("fecha_emision (DATE)", prompt)
+        self.assertIn("vrprima (NUMERIC) — Valor de prima emitida.", prompt)
+        self.assertIn("documento (STRING)", prompt)
+        self.assertNotIn("Documento de identidad del cliente", prompt)
+
     def test_missing_workbook_tabs_do_not_disable_catalog(self):
         workbook = Workbook()
         workbook.active.title = "metadata"

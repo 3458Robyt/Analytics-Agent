@@ -50,6 +50,14 @@ class SummaryTable:
     title: str
     columns: tuple[str, ...]
     rows: tuple[dict[str, Any], ...]
+    numeric_columns: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Clarification:
+    question: str
+    metric_key: str = ""
+    proposed_rule: str = ""
 
 
 @dataclass(frozen=True)
@@ -65,3 +73,8 @@ class AgentAnswer:
     session_id: str = ""
     query_jobs: tuple[dict[str, str], ...] = ()
     learning_updates: tuple[str, ...] = ()
+    status: str = "complete"
+    clarification: Clarification | None = None
+    audit: tuple[dict[str, Any], ...] = ()
+    timings: dict[str, float] = field(default_factory=dict)
+    turn_id: str = ""

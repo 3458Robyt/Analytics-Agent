@@ -2,7 +2,9 @@
 
 Agente de análisis en Python para consultar BigQuery en lenguaje natural. Incluye una CLI para ejecutar preguntas desde una terminal; no requiere un notebook.
 
-El agente descubre tablas visibles en los proyectos configurados, lee los esquemas reales de BigQuery y utiliza el Excel como fuente opcional de descripciones. Genera y ejecuta consultas de solo lectura, procesa resultados paginados sin un límite total de filas y devuelve una explicación con una tabla de resumen cuando aplica. Las respuestas del proveedor se solicitan con `store=false` de forma predeterminada.
+El agente descubre tablas visibles en los proyectos configurados, usa el esquema actual de BigQuery y toma del Excel solo las descripciones que coinciden exactamente con una columna vigente. Genera y ejecuta consultas de solo lectura, procesa todas las páginas y presenta los resultados en tablas con formato numérico español. Las respuestas del proveedor se solicitan con `store=false` de forma predeterminada.
+
+Para reducir latencia, las métricas con una definición confirmada se compilan en Python y no requieren una llamada adicional de revisión del modelo. Para consultas exploratorias se usa el dry run de BigQuery para validar columnas y tipos; cuando falta una decisión de negocio que cambie materialmente la cifra, el agente pregunta dentro de la misma ejecución. Las respuestas y tablas provienen de las filas leídas desde BigQuery; el modelo no puede reemplazarlas por cifras redactadas.
 
 ## Requisitos
 
@@ -92,6 +94,9 @@ analytics-agent learn list --status proposed
 # Desactiva una enseñanza incorrecta
 analytics-agent learn disable ID_APRENDIZAJE
 
+# Procesa la cola durable de aprendizaje si la ejecución en segundo plano no pudo iniciarla
+analytics-agent learn process
+
 # Reactiva una preferencia o procedimiento desactivado
 analytics-agent learn enable ID_APRENDIZAJE
 
@@ -110,13 +115,15 @@ La CLI guarda automáticamente sesiones, preguntas, respuestas, SQL, resultados 
 
 La memoria pertenece a la cuenta de sistema que ejecuta la CLI. En la POC, ejecuta siempre desde la misma cuenta de Workbench para conservar el historial. Esta separación local no autentica usuarios que compartan una cuenta de sistema.
 
-El prompt principal versionado se encuentra en `src/analytics_agent/prompts/agent_system_v1.txt`. `analytics-agent evaluate` ejecuta la batería local con ese prompt y con el archivo candidato, usando BigQuery simulado; el comando no cambia el prompt vigente. La evaluación sí llama al proveedor de IA para medir el comportamiento real del modelo, por lo que consume tokens.
+El prompt principal versionado se encuentra en `src/analytics_agent/prompts/agent_system_v2.txt`. `analytics-agent evaluate` ejecuta la batería local con ese prompt y con el archivo candidato, usando BigQuery simulado; el comando no cambia el prompt vigente. La evaluación sí llama al proveedor de IA para medir el comportamiento real del modelo, por lo que consume tokens.
 
 El glosario compartido, versionado junto al código, está en `src/analytics_agent/data/business_glossary.json`. Solo sus entradas marcadas como validadas se entregan al modelo; el agente no las edita. Las definiciones nuevas quedan como propuestas locales hasta que se revisen y agreguen mediante cambios en Git.
 
-Después de una respuesta, el agente analiza si el usuario expresó una preferencia o corrección y si el flujo produjo un procedimiento técnico que convenga repetir. Una declaración explícita puede entrar en vigor en la siguiente sesión; los procedimientos requieren dos usos distintos con consulta completada y respuesta revisada. Las definiciones de negocio siempre quedan pendientes. El aprendizaje no cambia prompts ni código por sí mismo. Al final de una respuesta, la CLI muestra qué se guardó; `analytics-agent learn list`, `show`, `disable` y `enable` permiten inspeccionarlo y corregirlo. Las filas detalladas no se envían al curador ni se guardan como evidencia. El curador hace una llamada adicional al proveedor por cada respuesta persistida, lo que añade algo de latencia y consumo de tokens.
+Las aclaraciones ocurren en la misma pregunta de `ask` o `chat`. Si el usuario confirma una regla de negocio, queda guardada como definición personal en la SQLite local; no se incorpora al glosario compartido. `analytics-agent definitions list`, `disable` y `enable` permiten inspeccionarla y administrarla.
 
-Antes de responder, el agente registra un plan de análisis, conserva la secuencia de herramientas, contrasta la tabla resumen con las filas agregadas consultadas y llama al modelo revisor para buscar diferencias de periodo, filtros, unidad y evidencia. El revisor puede hacer que el agente vuelva a consultar; después de dos intentos la respuesta indica los puntos que quedaron sin confirmar.
+El agente guarda sesiones, SQL, resultados agregados y referencias de BigQuery en SQLite local. Después de responder, pone en cola la extracción de preferencias y procedimientos para procesarla en segundo plano; eso evita sumar la llamada del curador al tiempo que se espera por la respuesta. Las preferencias requieren una declaración explícita; los procedimientos requieren dos usos distintos verificados. Las filas detalladas no se guardan como memoria ni se envían al curador. El aprendizaje no modifica el prompt o el código por sí mismo.
+
+Durante la POC, la presentación predeterminada `audit` incluye SQL, referencias de BigQuery, bytes y tiempos para que se puedan revisar los cálculos. Usa `analytics-agent ask --presentation business "pregunta"`, `analytics-agent chat --presentation business` o configura `ANALYTICS_AGENT_PRESENTATION=business` cuando quieras mostrar únicamente el resultado para negocio. El modo `business` oculta esos detalles al imprimir; la sesión sigue conservando el SQL para inspección local.
 
 ## Pruebas locales
 
@@ -128,4 +135,4 @@ python -m unittest discover -s tests -v
 
 ## Datos enviados al proveedor
 
-El agente envía al endpoint configurado las preguntas, el SQL generado y los metadatos y filas que necesita para redactar la respuesta. El valor predeterminado `LLM_STORE_RESPONSES=false` solicita que el proveedor no almacene las respuestas. Configura y utiliza el endpoint de acuerdo con las condiciones aprobadas para la POC.
+El agente envía al endpoint configurado las preguntas, el SQL generado, el esquema y las descripciones relevantes. En revisiones de SQL exploratorio puede enviar hasta 12 filas agregadas de muestra por consulta; la tabla final se construye localmente desde todas las filas de BigQuery y las filas detalladas no se incluyen en la memoria ni en la revisión. El valor predeterminado `LLM_STORE_RESPONSES=false` solicita que el proveedor no almacene las respuestas. Configura y utiliza el endpoint de acuerdo con las condiciones aprobadas para la POC.

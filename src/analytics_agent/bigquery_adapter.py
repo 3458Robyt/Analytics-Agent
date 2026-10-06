@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Iterator, Mapping
@@ -38,6 +38,7 @@ class QueryPage:
     job_id: str = ""
     job_project: str = ""
     location: str = ""
+    column_types: Mapping[str, str] = field(default_factory=dict)
 
 
 def _to_json_value(value: Any) -> Any:
@@ -298,6 +299,10 @@ class BigQueryAdapter:
         schema = getattr(iterator, "schema", None) if iterator is not None else None
         schema = schema or getattr(job, "schema", None) or ()
         columns = tuple(str(getattr(field, "name", "")) for field in schema if getattr(field, "name", ""))
+        column_types = {
+            str(getattr(field, "name", "")): str(getattr(field, "field_type", "") or "").upper()
+            for field in schema if getattr(field, "name", "")
+        }
         rows = tuple(
             {str(key): _to_json_value(value) for key, value in row.items()}
             for row in page
@@ -318,6 +323,7 @@ class BigQueryAdapter:
             job_id=str(getattr(job, "job_id", "") or ""),
             job_project=str(getattr(job, "project", "") or ""),
             location=str(getattr(job, "location", "") or ""),
+            column_types=column_types,
         )
 
 

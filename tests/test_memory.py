@@ -7,6 +7,17 @@ from analytics_agent.memory import SessionStore, load_glossary
 
 
 class SessionStoreTests(unittest.TestCase):
+    def test_schema_metadata_cache_is_owner_scoped_and_can_be_invalidated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with SessionStore(directory, owner="user:1") as store:
+                metadata = {"table_id": "project.dataset.table", "actual_schema": {"value": {"name": "value"}}}
+                store.set_schema_metadata("Project.Dataset.Table", metadata)
+                self.assertEqual(metadata, store.get_schema_metadata("project.dataset.table"))
+                store.invalidate_schema_metadata("project.dataset.table")
+                self.assertIsNone(store.get_schema_metadata("project.dataset.table"))
+            with SessionStore(directory, owner="user:2") as other:
+                self.assertIsNone(other.get_schema_metadata("project.dataset.table"))
+
     def test_session_persists_sql_aggregates_and_job_references_without_detail_rows(self):
         with tempfile.TemporaryDirectory() as directory:
             with SessionStore(directory, owner="david:1001") as store:

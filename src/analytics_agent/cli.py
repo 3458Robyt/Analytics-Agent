@@ -5,8 +5,11 @@ import json
 import os
 import sys
 import tempfile
+import subprocess
+import threading
+import time
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import unquote, urlsplit
@@ -46,6 +49,7 @@ class RuntimeConfig:
     workbook_path: str
     page_size: int
     state_dir: str = ""
+    presentation: str = "audit"
 
     @classmethod
     def from_env(cls) -> "RuntimeConfig":
@@ -59,6 +63,9 @@ class RuntimeConfig:
         page_size = int(os.environ.get("BQ_PAGE_SIZE", "500"))
         if page_size < 1:
             raise ValueError("BQ_PAGE_SIZE debe ser mayor que cero")
+        presentation = os.environ.get("ANALYTICS_AGENT_PRESENTATION", "audit").strip().lower()
+        if presentation not in {"audit", "business"}:
+            raise ValueError("ANALYTICS_AGENT_PRESENTATION debe ser 'audit' o 'business'")
         return cls(
             settings=settings,
             wire_api=wire_api,
@@ -68,6 +75,7 @@ class RuntimeConfig:
             workbook_path=os.environ.get("SCHEMA_WORKBOOK", "").strip(),
             page_size=page_size,
             state_dir=os.environ.get("ANALYTICS_AGENT_STATE_DIR", "").strip(),
+            presentation=presentation,
         )
 
 
@@ -131,15 +139,84 @@ def _build_agent(config: RuntimeConfig, console: Console) -> tuple[AnalyticsAgen
             "No se pudo iniciar el cliente de BigQuery; verifica ADC y la identidad del runtime "
             f"({type(exc).__name__})"
         ) from exc
-    llm = OpenAICompatibleProvider(
+    llm = _build_llm(config)
+    agent = AnalyticsAgent(catalog=catalog, llm=llm, bigquery=bigquery, settings=config.settings)
+    return agent, bigquery
+
+
+def _build_llm(config: RuntimeConfig) -> OpenAICompatibleProvider:
+    return OpenAICompatibleProvider(
         base_url=config.settings.llm_base_url,
         model=config.settings.llm_model,
         api_key=config.settings.llm_api_key,
         wire_api=config.wire_api,
         store_responses=config.store_responses,
     )
-    agent = AnalyticsAgent(catalog=catalog, llm=llm, bigquery=bigquery, settings=config.settings)
-    return agent, bigquery
+
+
+def _read_clarification(clarification: Any, console: Console) -> str:
+    console.print(Panel(clarification.question, title="Aclaración de negocio", border_style="yellow"))
+    return input("Aclaración: ").strip()
+
+
+def _run_learning_jobs(config: RuntimeConfig, state_dir: str, console: Console | None = None) -> int:
+    llm = _build_llm(config)
+    processed = 0
+    with SessionStore(state_dir or None) as store:
+        while True:
+            job = store.claim_learning_review()
+            if job is None:
+                break
+            turn_id, payload = job
+            try:
+                review, _usage = llm.review_learning(
+                    payload["question"],
+                    prior_context=payload["prior_context"],
+                    plan=payload["plan"],
+                    answer=payload["answer"],
+                    action_history=payload["action_history"],
+                    verified=payload["verified"],
+                    active_learnings=payload["active_learnings"],
+                )
+                updates = store.apply_learning_review(turn_id, review, verified=payload["verified"])
+                store.finish_learning_review(turn_id)
+                processed += 1
+                if console and updates:
+                    console.print(Panel("\n".join(updates), title="Aprendizaje procesado", border_style="green"))
+            except Exception as exc:
+                store.finish_learning_review(turn_id, error=f"{type(exc).__name__}: {exc}")
+                if console:
+                    console.print(f"[yellow]Aprendizaje en cola para reintentar ({type(exc).__name__}).[/yellow]")
+                break
+    return processed
+
+
+def _launch_learning_worker(config: RuntimeConfig, *, env_file: str = ".env") -> None:
+    command = [
+        sys.executable,
+        "-m",
+        "analytics_agent",
+        "--env-file",
+        str(Path(env_file).expanduser().resolve()),
+        "learn",
+        "process",
+    ]
+    environment = os.environ.copy()
+    if config.state_dir:
+        environment["ANALYTICS_AGENT_STATE_DIR"] = config.state_dir
+    try:
+        subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            start_new_session=True,
+            env=environment,
+        )
+    except OSError:
+        # The durable queue remains available to `analytics-agent learn process`.
+        return
 
 
 def _discover(agent: AnalyticsAgent, config: RuntimeConfig, console: Console) -> dict[str, Any]:
@@ -150,21 +227,34 @@ def _discover(agent: AnalyticsAgent, config: RuntimeConfig, console: Console) ->
     return report
 
 
-def _format_cell(value: Any) -> str:
+def _format_cell(value: Any, *, numeric: bool = False) -> str:
     if value is None:
         return "—"
     if isinstance(value, bool):
         return "Sí" if value else "No"
     if isinstance(value, int):
-        return f"{value:,}"
+        return _format_number(Decimal(value))
     if isinstance(value, (float, Decimal)):
-        return f"{value:,.2f}"
+        return _format_number(Decimal(str(value)))
+    if numeric:
+        try:
+            return _format_number(Decimal(str(value)))
+        except (InvalidOperation, ValueError, TypeError):
+            pass
     if isinstance(value, (dict, list, tuple)):
         return json.dumps(value, ensure_ascii=False, default=str)
     return str(value)
 
 
-def _render_answer(answer: AgentAnswer, console: Console) -> None:
+def _format_number(value: Decimal) -> str:
+    rendered = f"{value:,.2f}" if value.as_tuple().exponent < 0 else f"{value:,.0f}"
+    return rendered.replace(",", "§").replace(".", ",").replace("§", ".")
+
+
+def _render_answer(answer: AgentAnswer, console: Console, presentation: str = "audit") -> None:
+    if answer.status == "needs_clarification" and answer.clarification:
+        console.print(Panel(answer.clarification.question, title="Aclaración de negocio", border_style="yellow"))
+        return
     console.print()
     if answer.answer:
         console.print(Markdown(answer.answer))
@@ -172,21 +262,32 @@ def _render_answer(answer: AgentAnswer, console: Console) -> None:
         console.print()
         result_table = Table(title=answer.summary_table.title, show_lines=False, header_style="bold cyan")
         for column in answer.summary_table.columns:
-            result_table.add_column(column, overflow="fold")
+            numeric = column in answer.summary_table.numeric_columns
+            result_table.add_column(column, overflow="fold", justify="right" if numeric else "left")
         for row in answer.summary_table.rows:
-            result_table.add_row(*(_format_cell(row.get(column)) for column in answer.summary_table.columns))
+            result_table.add_row(*(
+                _format_cell(row.get(column), numeric=column in answer.summary_table.numeric_columns)
+                for column in answer.summary_table.columns
+            ))
         console.print(result_table)
     if answer.detail_table and answer.detail_table.columns:
         console.print()
         detail_table = Table(title=answer.detail_table.title, show_lines=False, header_style="bold cyan")
         for column in answer.detail_table.columns:
-            detail_table.add_column(column, overflow="fold")
+            detail_table.add_column(
+                column,
+                overflow="fold",
+                justify="right" if column in answer.detail_table.numeric_columns else "left",
+            )
         for row in answer.detail_table.rows:
-            detail_table.add_row(*(_format_cell(row.get(column)) for column in answer.detail_table.columns))
+            detail_table.add_row(*(
+                _format_cell(row.get(column), numeric=column in answer.detail_table.numeric_columns)
+                for column in answer.detail_table.columns
+            ))
         console.print(detail_table)
     if answer.assumptions:
         console.print(Panel("\n".join(f"• {item}" for item in answer.assumptions), title="Supuestos", border_style="yellow"))
-    if answer.learning_updates:
+    if answer.learning_updates and presentation == "audit":
         console.print(Panel("\n".join(f"• {item}" for item in answer.learning_updates),
                             title="Aprendizaje actualizado", border_style="green"))
     stats: list[str] = []
@@ -198,9 +299,9 @@ def _render_answer(answer: AgentAnswer, console: Console) -> None:
         stats.append(f"Bytes procesados: {answer.bytes_processed:,}")
     if answer.session_id:
         stats.append("Sesión: " + answer.session_id)
-    if stats:
+    if stats and presentation == "audit":
         console.print("[dim]" + " · ".join(stats) + "[/dim]", highlight=False)
-    if answer.query_jobs:
+    if answer.query_jobs and presentation == "audit":
         jobs = [job for job in answer.query_jobs if job.get("job_id")]
         if jobs:
             console.print("[dim]Trabajos BigQuery: " + ", ".join(
@@ -208,6 +309,32 @@ def _render_answer(answer: AgentAnswer, console: Console) -> None:
                 + (f" ({job['location']})" if job.get("location") else "")
                 for job in jobs
             ) + "[/dim]", highlight=False)
+    if presentation == "audit":
+        for index, audit in enumerate(answer.audit, start=1):
+            details = [
+                "Fuentes: " + (", ".join(audit.get("tables", [])) or "no registradas"),
+                "Bytes procesados: " + _format_cell(audit.get("bytes_processed", 0)),
+            ]
+            job = audit.get("job", {})
+            if job.get("job_id"):
+                details.append("Job: " + str(job["job_id"]))
+            if job.get("location"):
+                details.append("Región: " + str(job["location"]))
+            console.print(Panel("\n".join(details), title=f"Auditoría · consulta {index}", border_style="blue"))
+            if audit.get("sql"):
+                console.print(Panel(str(audit["sql"]), title="SQL ejecutado", border_style="yellow"))
+        if answer.timings:
+            timing_text = " · ".join(
+                f"{stage}: {seconds:.2f} s" for stage, seconds in answer.timings.items()
+            )
+            console.print("[dim]Tiempos: " + timing_text + "[/dim]", highlight=False)
+        if answer.usage:
+            console.print(
+                "[dim]Tokens del modelo: "
+                + str(answer.usage.get("total_tokens", 0))
+                + "[/dim]",
+                highlight=False,
+            )
 
 
 def _answer_context(answer: AgentAnswer) -> str:
@@ -247,7 +374,15 @@ def _run_doctor(config: RuntimeConfig, console: Console) -> int:
     return 0
 
 
-def _run_ask(question: str, config: RuntimeConfig, console: Console, progress: Console) -> int:
+def _run_ask(
+    question: str,
+    config: RuntimeConfig,
+    console: Console,
+    progress: Console,
+    *,
+    presentation: str = "",
+    env_file: str = ".env",
+) -> int:
     agent, _ = _build_agent(config, console)
     with SessionStore(config.state_dir or None) as store:
         session_id = store.create_session(question)
@@ -256,12 +391,21 @@ def _run_ask(question: str, config: RuntimeConfig, console: Console, progress: C
             session_store=store,
             session_id=session_id,
             on_progress=lambda message: progress.print(f"[dim]{message}[/dim]"),
+            on_clarification=lambda request: _read_clarification(request, console),
         )
-    _render_answer(answer, console)
+    _render_answer(answer, console, presentation or config.presentation)
+    if answer.learning_updates:
+        _launch_learning_worker(config, env_file=env_file)
     return 0
 
 
-def _run_chat(config: RuntimeConfig, console: Console, progress: Console, resume_id: str = "") -> int:
+def _run_chat(
+    config: RuntimeConfig,
+    console: Console,
+    progress: Console,
+    resume_id: str = "",
+    presentation: str = "",
+) -> int:
     agent, _ = _build_agent(config, console)
     with SessionStore(config.state_dir or None) as store:
         if resume_id:
@@ -271,11 +415,12 @@ def _run_chat(config: RuntimeConfig, console: Console, progress: Console, resume
         else:
             session_id = store.create_session()
         console.print(Panel(
-            "Escribe una pregunta. Usa [bold]/new[/bold] o [bold]/clear[/bold] para iniciar otra sesión, "
-            "[bold]/sessions[/bold] para listar sesiones o [bold]/exit[/bold] para salir.",
+            "Escribe una pregunta. Usa [bold]/new[/bold], [bold]/sessions[/bold], "
+            "[bold]/presentation audit|business[/bold] o [bold]/exit[/bold].",
             title=f"Analytics Agent · sesión {session_id}",
             border_style="cyan",
         ))
+        selected_presentation = presentation or config.presentation
         while True:
             try:
                 question = input("Tú: ").strip()
@@ -292,6 +437,14 @@ def _run_chat(config: RuntimeConfig, console: Console, progress: Console, resume
             if command == "/sessions":
                 _render_sessions(store, console)
                 continue
+            if command.startswith("/presentation "):
+                requested_presentation = command.split(maxsplit=1)[1].strip()
+                if requested_presentation not in {"audit", "business"}:
+                    console.print("[yellow]Usa /presentation audit o /presentation business.[/yellow]")
+                else:
+                    selected_presentation = requested_presentation
+                    console.print(f"[dim]Presentación: {selected_presentation}[/dim]")
+                continue
             if not question:
                 continue
             try:
@@ -300,8 +453,17 @@ def _run_chat(config: RuntimeConfig, console: Console, progress: Console, resume
                     session_store=store,
                     session_id=session_id,
                     on_progress=lambda message: progress.print(f"[dim]{message}[/dim]"),
+                    on_clarification=lambda request: _read_clarification(request, console),
                 )
-                _render_answer(answer, console)
+                _render_answer(answer, console, selected_presentation)
+                if answer.learning_updates:
+                    worker = threading.Thread(
+                        target=_run_learning_jobs,
+                        args=(config, config.state_dir, None),
+                        name="analytics-agent-learning",
+                        daemon=True,
+                    )
+                    worker.start()
             except (BigQueryError, LLMError, ValueError) as exc:
                 console.print(f"[red]No se pudo responder:[/red] {exc}", highlight=False)
 
@@ -359,6 +521,10 @@ def _run_sessions(args: argparse.Namespace, state_dir: str, console: Console) ->
 
 def _run_learning(args: argparse.Namespace, state_dir: str, console: Console) -> int:
     with SessionStore(state_dir or None) as store:
+        if args.learning_action == "process":
+            count = _run_learning_jobs(RuntimeConfig.from_env(), state_dir, console)
+            console.print(f"[green]Propuestas procesadas:[/green] {count}")
+            return 0
         if args.learning_action == "list":
             rows = store.list_learning(status=args.status or "")
             if not rows:
@@ -400,6 +566,32 @@ def _run_learning(args: argparse.Namespace, state_dir: str, console: Console) ->
             console.print("[red]Ese aprendizaje no existe o ya está en ese estado.[/red]")
             return 1
         console.print(f"[green]{message}:[/green] {args.learning_id}")
+        return 0
+
+
+def _run_definitions(args: argparse.Namespace, state_dir: str, console: Console) -> int:
+    with SessionStore(state_dir or None) as store:
+        if args.definition_action == "list":
+            rows = store.list_business_definitions(status=args.status)
+            if not rows:
+                console.print("[dim]No hay definiciones personales confirmadas.[/dim]")
+                return 0
+            table = Table(title="Definiciones confirmadas para esta cuenta", header_style="bold cyan")
+            table.add_column("Métrica")
+            table.add_column("Estado")
+            table.add_column("Regla", overflow="fold")
+            table.add_column("Confirmación", overflow="fold")
+            for row in rows:
+                table.add_row(row["metric_key"], row["status"], row["proposed_rule"], row["user_confirmation"])
+            console.print(table)
+            console.print("[dim]Son reglas personales confirmadas, no definiciones oficiales de toda la empresa.[/dim]")
+            return 0
+        status = "disabled" if args.definition_action == "disable" else "active"
+        changed = store.set_business_definition_status(args.metric_key, status)
+        if not changed:
+            console.print("[red]No se encontró esa definición para la cuenta actual.[/red]")
+            return 1
+        console.print(f"[green]Definición {status}:[/green] {args.metric_key}")
         return 0
 
 
@@ -452,8 +644,12 @@ def _build_parser() -> argparse.ArgumentParser:
     commands.add_parser("doctor", help="Revisa configuración y acceso a metadatos; no ejecuta SQL.")
     ask = commands.add_parser("ask", help="Responde una pregunta y ejecuta las consultas necesarias.")
     ask.add_argument("question", nargs="+", help="Pregunta de negocio.")
+    ask.add_argument("--presentation", choices=("audit", "business"), default="",
+                     help="Presentación de la respuesta (por defecto: ANALYTICS_AGENT_PRESENTATION o audit).")
     chat = commands.add_parser("chat", help="Abre una conversación persistente en la terminal.")
     chat.add_argument("--resume", help="Continúa una sesión guardada por su identificador.")
+    chat.add_argument("--presentation", choices=("audit", "business"), default="",
+                      help="Presentación predeterminada en esta conversación.")
     sessions = commands.add_parser("sessions", help="Lista o muestra sesiones de la cuenta actual.")
     sessions_commands = sessions.add_subparsers(dest="sessions_action", required=True)
     sessions_commands.add_parser("list", help="Lista las sesiones guardadas.")
@@ -470,6 +666,15 @@ def _build_parser() -> argparse.ArgumentParser:
     learning_disable.add_argument("learning_id")
     learning_enable = learning_commands.add_parser("enable", help="Restaura un aprendizaje desactivado por el usuario.")
     learning_enable.add_argument("learning_id")
+    learning_commands.add_parser("process", help="Procesa la cola de aprendizaje diferido.")
+    definitions = commands.add_parser("definitions", help="Lista y administra definiciones personales confirmadas.")
+    definition_commands = definitions.add_subparsers(dest="definition_action", required=True)
+    definition_list = definition_commands.add_parser("list", help="Lista definiciones confirmadas para esta cuenta.")
+    definition_list.add_argument("--status", choices=("active", "disabled", ""), default="active")
+    definition_disable = definition_commands.add_parser("disable", help="Deja de reutilizar una definición personal.")
+    definition_disable.add_argument("metric_key")
+    definition_enable = definition_commands.add_parser("enable", help="Restaura una definición personal desactivada.")
+    definition_enable.add_argument("metric_key")
     evaluate = commands.add_parser("evaluate", help="Compara un prompt candidato con BigQuery simulado.")
     evaluate.add_argument("--candidate-prompt", required=True, help="Archivo de texto con el prompt candidato completo.")
     evaluate.add_argument("--cases", default="", help="Archivo JSON opcional de casos de evaluación.")
@@ -496,15 +701,26 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_doctor(config, console)
         if args.command == "ask":
             config = RuntimeConfig.from_env()
-            return _run_ask(" ".join(args.question).strip(), config, console, progress)
+            return _run_ask(
+                " ".join(args.question).strip(), config, console, progress,
+                presentation=args.presentation, env_file=args.env_file,
+            )
         if args.command == "sessions":
             return _run_sessions(args, os.environ.get("ANALYTICS_AGENT_STATE_DIR", "").strip(), console)
         if args.command == "learn":
-            return _run_learning(args, os.environ.get("ANALYTICS_AGENT_STATE_DIR", "").strip(), console)
+            state_dir = os.environ.get("ANALYTICS_AGENT_STATE_DIR", "").strip()
+            if args.learning_action == "process":
+                config = RuntimeConfig.from_env()
+                count = _run_learning_jobs(config, state_dir, console)
+                console.print(f"[green]Propuestas procesadas:[/green] {count}")
+                return 0
+            return _run_learning(args, state_dir, console)
+        if args.command == "definitions":
+            return _run_definitions(args, os.environ.get("ANALYTICS_AGENT_STATE_DIR", "").strip(), console)
         config = RuntimeConfig.from_env()
         if args.command == "evaluate":
             return _run_evaluation(args, config, console)
-        return _run_chat(config, console, progress, args.resume or "")
+        return _run_chat(config, console, progress, args.resume or "", args.presentation or "")
     except KeyboardInterrupt:
         console.print("\n[dim]Interrumpido.[/dim]")
         return 130

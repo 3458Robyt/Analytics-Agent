@@ -39,6 +39,7 @@ class TableSchema:
     table_type: str = ""
     location: str = ""
     metadata_loaded: bool = False
+    metadata_loaded_at: float = 0.0
 
 
 @dataclass
@@ -48,12 +49,13 @@ class SchemaCatalog:
     tables: dict[str, TableSchema]
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
-    def add_table(self, table: TableSchema) -> None:
+    def add_table(self, table: TableSchema, *, replace_columns: bool = False) -> None:
         key = _key(table.table_id)
         previous = self.tables.get(key)
         if previous:
-            columns = dict(previous.columns)
-            columns.update(table.columns)
+            columns = dict(table.columns) if replace_columns else dict(previous.columns)
+            if not replace_columns:
+                columns.update(table.columns)
             table = TableSchema(
                 sheet_name=table.sheet_name or previous.sheet_name,
                 table_id=table.table_id,
@@ -63,28 +65,54 @@ class SchemaCatalog:
                 table_type=table.table_type or previous.table_type,
                 location=table.location or previous.location,
                 metadata_loaded=table.metadata_loaded or previous.metadata_loaded,
+                metadata_loaded_at=max(table.metadata_loaded_at, previous.metadata_loaded_at),
             )
         self.tables[key] = table
 
-    def prompt_text(self, table_ids: tuple[str, ...] | list[str] | None = None) -> str:
+    def prompt_text(
+        self,
+        table_ids: tuple[str, ...] | list[str] | None = None,
+        *,
+        query: str = "",
+    ) -> str:
         selected = (
             [self.tables[_key(table_id)] for table_id in table_ids if _key(table_id) in self.tables]
             if table_ids is not None
             else list(self.tables.values())
         )
+        stop_words = {"con", "del", "desde", "donde", "entre", "hasta", "para", "por", "que", "sobre", "una", "uno"}
+        query_terms = []
+        for item in re.findall(r"[\w.-]+", query, flags=re.UNICODE):
+            normalized = _normalize(item)
+            if len(normalized) > 2 and normalized not in stop_words and not normalized.isdigit():
+                query_terms.append(normalized)
         sections: list[str] = []
         for table in selected:
-            header = f"{table.table_id}"
+            freshness = "esquema de BigQuery cacheado" if table.metadata_loaded else "pistas del diccionario; esquema vivo no cargado"
+            header = f"{table.table_id} [{freshness}]"
             if table.table_type:
                 header += f" [{table.table_type}]"
             if table.description:
                 header += f" — {table.description}"
             fields = []
             for column in table.columns.values():
-                description = f" — {column.description}" if column.description else ""
+                description_text = column.description.strip()
+                if query_terms and description_text:
+                    search_text = _normalize(f"{column.name} {description_text}")
+                    if not any(term in search_text for term in query_terms):
+                        description_text = ""
+                if len(description_text) > 240:
+                    description_text = description_text[:237].rstrip() + "..."
+                description = f" — {description_text}" if description_text else ""
                 fields.append(f"  - {column.name} ({column.data_type}){description}")
             sections.append(header + ("\n" + "\n".join(fields) if fields else "\n  - Esquema aún no consultado"))
-        return "\n\n".join(sections)
+        text = "\n\n".join(sections)
+        if query_terms and text:
+            text += (
+                "\n\nSe incluyen todos los nombres y tipos de columna del catálogo cargado; "
+                "las descripciones se muestran cuando coinciden con términos de la pregunta."
+            )
+        return text
 
     def search_tables(
         self,
@@ -134,7 +162,7 @@ def merge_bigquery_schema(
                 data_type=str(actual.get("data_type") or "").strip().upper(),
                 description=description,
             )
-        catalog.add_table(TableSchema(
+        merged_table = TableSchema(
             sheet_name=existing.sheet_name if existing else "",
             table_id=str(status.get("table_id") or table_id),
             columns=merged_columns,
@@ -143,7 +171,11 @@ def merge_bigquery_schema(
             table_type=str(status.get("table_type") or (existing.table_type if existing else "")),
             location=str(status.get("location") or (existing.location if existing else "")),
             metadata_loaded=True,
-        ))
+            metadata_loaded_at=existing.metadata_loaded_at if existing else 0.0,
+        )
+        # Live BigQuery schema is authoritative. Keep descriptions only for
+        # exact field-name matches; never retain stale workbook columns.
+        catalog.add_table(merged_table, replace_columns=True)
     return catalog
 
 

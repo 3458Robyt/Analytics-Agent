@@ -14,11 +14,11 @@ class LLMError(RuntimeError):
     """The configured model endpoint could not return a usable response."""
 
 
-AGENT_SYSTEM_PROMPT_VERSION = "v1"
+AGENT_SYSTEM_PROMPT_VERSION = "v2"
 
 
 def load_default_agent_system_prompt() -> str:
-    prompt_path = Path(__file__).parent / "prompts" / "agent_system_v1.txt"
+    prompt_path = Path(__file__).parent / "prompts" / "agent_system_v2.txt"
     try:
         return prompt_path.read_text(encoding="utf-8").strip()
     except OSError as exc:  # pragma: no cover - missing packaged resource
@@ -241,6 +241,8 @@ class OpenAICompatibleProvider:
         retrieved_memory: str = "",
         glossary_context: str = "",
         review_feedback: str = "",
+        catalog_context: str = "",
+        user_clarification: str = "",
     ) -> tuple[dict[str, Any], Mapping[str, int]]:
         """Ask the model for the next catalog/query action or its final answer."""
         system = self.agent_system_prompt or load_default_agent_system_prompt()
@@ -254,18 +256,20 @@ class OpenAICompatibleProvider:
             "notas_de_trabajo": working_notes,
             "resultado_del_ultimo_paso": last_tool_result or {},
             "retroalimentacion_de_revision": review_feedback,
+            "esquema_y_descripciones_disponibles": catalog_context,
+            "aclaracion_explicita_del_usuario": user_clarification,
         }, ensure_ascii=False, default=str)
         result, usage = self._complete_json((
             {"role": "system", "content": system},
             {"role": "user", "content": user},
-        ), max_tokens=5000, source="El modelo")
+        ), max_tokens=2600, source="El modelo")
         action = result.get("action")
-        if action not in {"plan", "search_tables", "search_memory", "describe_tables", "run_select", "read_page", "finish"}:
+        if action not in {"plan", "clarify", "search_tables", "search_memory", "describe_tables", "run_metric", "run_select", "read_page", "finish"}:
             raise LLMError("El modelo devolvió una acción desconocida")
         result.setdefault("notes", "")
         if not isinstance(result["notes"], str):
             raise LLMError("`notes` debe ser texto")
-        for field in ("search_text", "sql", "query_id", "answer"):
+        for field in ("search_text", "sql", "query_id", "answer", "metric_key", "start_date", "end_date", "summary_query_id"):
             result.setdefault(field, "")
             if not isinstance(result[field], str):
                 raise LLMError(f"`{field}` debe ser texto")
@@ -276,6 +280,24 @@ class OpenAICompatibleProvider:
         result.setdefault("summary_table", None)
         result.setdefault("plan", {})
         result.setdefault("present_rows", False)
+        result.setdefault("group_by", [])
+        result.setdefault("clarification", {})
+        if action == "clarify":
+            if not isinstance(result["clarification"], dict):
+                raise LLMError("`clarification` debe ser un objeto")
+            for field in ("question", "metric_key", "proposed_rule"):
+                result["clarification"].setdefault(field, "")
+                if not isinstance(result["clarification"][field], str):
+                    raise LLMError(f"`clarification.{field}` debe ser texto")
+            if not result["clarification"]["question"].strip():
+                raise LLMError("La aclaración debe contener una pregunta concreta")
+        if action == "run_metric":
+            if not result["metric_key"].strip():
+                raise LLMError("`metric_key` no puede estar vacío")
+            if not result["start_date"].strip() or not result["end_date"].strip():
+                raise LLMError("La métrica requiere el inicio y fin exclusivo del periodo")
+            if not isinstance(result["group_by"], list) or not all(isinstance(item, str) for item in result["group_by"]):
+                raise LLMError("`group_by` debe ser una lista de campos")
         if action == "plan":
             if not isinstance(result["plan"], dict):
                 raise LLMError("`plan` debe ser un objeto")
@@ -345,7 +367,7 @@ No conviertas una interpretación tentativa, un silencio o una única consulta e
         result, usage = self._complete_json((
             {"role": "system", "content": system},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)},
-        ), max_tokens=1600, source="El curador de aprendizaje")
+        ), max_tokens=900, source="El curador de aprendizaje")
         result.setdefault("user_correction_detected", False)
         if not isinstance(result["user_correction_detected"], bool):
             raise LLMError("`user_correction_detected` debe ser booleano")
