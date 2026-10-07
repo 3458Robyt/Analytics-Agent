@@ -17,6 +17,20 @@ dependencies = [
     "sqlglot>=25,<30",
 ]
 
+[project.optional-dependencies]
+teams-worker = [
+    "google-cloud-pubsub>=2.25,<3",
+]
+teams-gateway = [
+    "fastapi>=0.115,<1",
+    "google-auth>=2.29,<3",
+    "google-cloud-firestore>=2.19,<3",
+    "google-cloud-pubsub>=2.25,<3",
+    "microsoft-teams-apps>=2.1,<3",
+    "microsoft-teams-cards>=2.1,<3",
+    "uvicorn[standard]>=0.30,<1",
+]
+
 [project.scripts]
 analytics-agent = "analytics_agent.cli:main"
 

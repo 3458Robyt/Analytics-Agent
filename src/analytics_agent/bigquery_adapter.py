@@ -1,10 +1,28 @@
 from __future__ import annotations
 
+import contextvars
+import hashlib
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Iterator, Mapping
 from uuid import uuid4
+
+
+_request_id_context: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "analytics_agent_bigquery_request_id", default=""
+)
+
+
+@contextmanager
+def bigquery_request_scope(request_id: str):
+    """Give each queued Teams request stable BigQuery job IDs for safe redelivery."""
+    token = _request_id_context.set(request_id.strip())
+    try:
+        yield
+    finally:
+        _request_id_context.reset(token)
 
 
 class BigQueryError(RuntimeError):
@@ -259,7 +277,28 @@ class BigQueryAdapter:
             raise BigQueryError("Instala google-cloud-bigquery") from exc
         try:
             config = bigquery.QueryJobConfig(use_legacy_sql=False)
-            job = self.client.query(sql, job_config=config, location=location or self.location or None)
+            request_id = _request_id_context.get()
+            if request_id:
+                digest = hashlib.sha256((request_id + "\0" + sql).encode("utf-8")).hexdigest()[:48]
+                job_id = "analytics_agent_" + digest
+                try:
+                    job = self.client.query(
+                        sql,
+                        job_config=config,
+                        location=location or self.location or None,
+                        job_id=job_id,
+                    )
+                except Exception as exc:
+                    # Pub/Sub can redeliver after a worker restart. Reuse the job
+                    # created for this request instead of charging for it twice.
+                    is_conflict = getattr(exc, "code", None) == 409 or type(exc).__name__ == "Conflict"
+                    if not is_conflict:
+                        raise
+                    job = self.client.get_job(job_id, location=location or self.location or None)
+                    if str(getattr(job, "query", "")) != sql:
+                        raise BigQueryError("El identificador idempotente de BigQuery corresponde a otra consulta")
+            else:
+                job = self.client.query(sql, job_config=config, location=location or self.location or None)
             iterator = job.result(page_size=self.page_size)
             pages = iter(iterator.pages)
             query_id = str(uuid4())

@@ -5,7 +5,7 @@ from datetime import date
 from decimal import Decimal
 from unittest.mock import patch
 
-from analytics_agent.bigquery_adapter import BigQueryAdapter, _to_json_value
+from analytics_agent.bigquery_adapter import BigQueryAdapter, _to_json_value, bigquery_request_scope
 
 
 class FakePage(list):
@@ -72,6 +72,51 @@ class BigQueryAdapterTests(unittest.TestCase):
         self.assertFalse(second.has_next_page)
         self.assertNotIn("maximum_bytes_billed", config_args[0])
         self.assertNotIn("job_timeout_ms", config_args[0])
+
+    def test_teams_redelivery_reuses_deterministic_bigquery_job(self):
+        class Conflict(Exception):
+            code = 409
+
+        class Client:
+            def __init__(self):
+                self.jobs = {}
+                self.query_calls = 0
+
+            def query(self, sql, *, job_id, **kwargs):
+                self.query_calls += 1
+                if job_id in self.jobs:
+                    raise Conflict("already exists")
+                job = FakeJob()
+                job.query = sql
+                job.job_id = job_id
+                job.project = "test-project"
+                job.location = "us-east1"
+                self.jobs[job_id] = job
+                return job
+
+            def get_job(self, job_id, *, location=None):
+                return self.jobs[job_id]
+
+        class FakeQueryJobConfig:
+            def __init__(self, **kwargs):
+                pass
+
+        bigquery = types.ModuleType("google.cloud.bigquery")
+        bigquery.QueryJobConfig = FakeQueryJobConfig
+        cloud = types.ModuleType("google.cloud")
+        cloud.bigquery = bigquery
+        google = types.ModuleType("google")
+        google.cloud = cloud
+        client = Client()
+        adapter = BigQueryAdapter(client, location="us-east1", page_size=1)
+        with patch.dict(sys.modules, {"google": google, "google.cloud": cloud, "google.cloud.bigquery": bigquery}):
+            with bigquery_request_scope("teams-request-1"):
+                first = adapter.execute("SELECT 1")
+            with bigquery_request_scope("teams-request-1"):
+                repeated = adapter.execute("SELECT 1")
+        self.assertEqual(2, client.query_calls)
+        self.assertEqual(first.job_id, repeated.job_id)
+        self.assertEqual(first.rows, repeated.rows)
 
     def test_dry_run_has_no_byte_ceiling_and_rejects_user_routines(self):
         config_args = []

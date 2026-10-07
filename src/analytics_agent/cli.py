@@ -186,10 +186,16 @@ def _read_clarification(clarification: Any, console: Console) -> str:
     return input("Aclaración: ").strip()
 
 
-def _run_learning_jobs(config: RuntimeConfig, state_dir: str, console: Console | None = None) -> int:
+def _run_learning_jobs(
+    config: RuntimeConfig,
+    state_dir: str,
+    console: Console | None = None,
+    *,
+    owner: str | None = None,
+) -> int:
     llm = _build_llm(config)
     processed = 0
-    with SessionStore(state_dir or None) as store:
+    with SessionStore(state_dir or None, owner=owner) as store:
         while True:
             job = store.claim_learning_review()
             if job is None:
@@ -705,6 +711,14 @@ def _build_parser() -> argparse.ArgumentParser:
     evaluate = commands.add_parser("evaluate", help="Compara un prompt candidato con BigQuery simulado.")
     evaluate.add_argument("--candidate-prompt", required=True, help="Archivo de texto con el prompt candidato completo.")
     evaluate.add_argument("--cases", default="", help="Archivo JSON opcional de casos de evaluación.")
+    teams = commands.add_parser("teams", help="Administra observaciones recibidas desde Teams.")
+    teams_commands = teams.add_subparsers(dest="teams_action", required=True)
+    feedback = teams_commands.add_parser("feedback", help="Consulta las correcciones reportadas por usuarios del piloto.")
+    feedback_commands = feedback.add_subparsers(dest="feedback_action", required=True)
+    feedback_list = feedback_commands.add_parser("list", help="Lista las observaciones recientes.")
+    feedback_list.add_argument("--limit", type=int, default=100)
+    commands.add_parser("teams-worker", help="Procesa solicitudes de Teams desde este runtime de Workbench.")
+    commands.add_parser("teams-gateway", help="Inicia el receptor HTTP de Teams para desplegarlo en Cloud Run.")
     return parser
 
 
@@ -726,6 +740,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "doctor":
             config = RuntimeConfig.from_env()
             return _run_doctor(config, console)
+        if args.command == "teams":
+            from .teams_state import TeamsWorkerStore
+
+            with TeamsWorkerStore() as store:
+                rows = store.list_feedback(limit=args.limit)
+            table = Table(title="Correcciones reportadas desde Teams", header_style="bold cyan")
+            table.add_column("Fecha UTC")
+            table.add_column("Usuario Teams", overflow="fold")
+            table.add_column("Resultado", overflow="fold")
+            table.add_column("Observación", overflow="fold")
+            for row in rows:
+                created = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(float(row["created_at"])))
+                table.add_row(created, row["owner"], row["result_id"], row["feedback"])
+            console.print(table)
+            return 0
+        if args.command == "teams-worker":
+            from .teams_worker import run_worker
+
+            return run_worker()
+        if args.command == "teams-gateway":
+            from .teams_gateway import run_gateway
+
+            return run_gateway()
         if args.command == "ask":
             config = RuntimeConfig.from_env()
             return _run_ask(

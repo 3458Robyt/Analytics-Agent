@@ -136,3 +136,7 @@ python -m unittest discover -s tests -v
 ## Datos enviados al proveedor
 
 El agente envía al endpoint configurado las preguntas, el SQL generado, el esquema y las descripciones relevantes. En revisiones de SQL exploratorio puede enviar hasta 12 filas agregadas de muestra por consulta; la tabla final se construye localmente desde todas las filas de BigQuery y las filas detalladas no se incluyen en la memoria ni en la revisión. El valor predeterminado `LLM_STORE_RESPONSES=false` solicita que el proveedor no almacene las respuestas. Configura y utiliza el endpoint de acuerdo con las condiciones aprobadas para la POC.
+
+## Piloto en Microsoft Teams
+
+La integración y los requisitos de despliegue están en [docs/TEAMS_PILOT.md](docs/TEAMS_PILOT.md). Teams se conecta a un receptor en Cloud Run; el proceso que ejecuta BigQuery sigue en Workbench y se comunica por Pub/Sub. El gateway no recibe ni necesita `LLM_API_KEY`. Para el receptor se requiere Python 3.12; el worker de Workbench se instala por separado con `pip install -e ".[teams-worker]"`.

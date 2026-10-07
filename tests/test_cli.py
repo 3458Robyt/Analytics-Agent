@@ -67,6 +67,11 @@ class CliFormattingTests(unittest.TestCase):
         self.assertEqual("learn", args.command)
         self.assertEqual("list", args.learning_action)
         self.assertEqual("proposed", args.status)
+
+    def test_teams_feedback_list_cli_arguments(self):
+        args = _build_parser().parse_args(["teams", "feedback", "list", "--limit", "25"])
+        self.assertEqual("teams", args.command)
+        self.assertEqual(25, args.limit)
         enable_args = _build_parser().parse_args(["learn", "enable", "abcd"])
         self.assertEqual("enable", enable_args.learning_action)
         evaluation_args = _build_parser().parse_args(["evaluate", "--candidate-prompt", "/tmp/prompt.txt"])

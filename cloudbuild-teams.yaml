@@ -1,0 +1,14 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.teams
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/analytics-agent/teams-gateway:${_TAG}
+      - .
+images:
+  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/analytics-agent/teams-gateway:${_TAG}
+substitutions:
+  _REGION: us-east1
+  _TAG: pilot
