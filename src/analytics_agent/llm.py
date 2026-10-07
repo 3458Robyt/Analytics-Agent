@@ -271,12 +271,18 @@ class OpenAICompatibleProvider:
             {"role": "user", "content": user},
         ), max_tokens=2600, source="El modelo")
         action = result.get("action")
-        if action not in {"plan", "clarify", "search_tables", "search_memory", "describe_tables", "run_metric", "run_select", "read_page", "finish"}:
+        if action not in {
+            "plan", "clarify", "search_tables", "search_memory", "describe_tables",
+            "run_metric", "run_select", "read_page", "inspect_result", "create_excel", "finish",
+        }:
             raise LLMError("El modelo devolvió una acción desconocida")
         result.setdefault("notes", "")
         if not isinstance(result["notes"], str):
             raise LLMError("`notes` debe ser texto")
-        for field in ("search_text", "sql", "query_id", "answer", "metric_key", "start_date", "end_date", "summary_query_id"):
+        for field in (
+            "search_text", "sql", "query_id", "answer", "metric_key", "start_date", "end_date",
+            "summary_query_id", "operation", "column", "title",
+        ):
             result.setdefault(field, "")
             if not isinstance(result[field], str):
                 raise LLMError(f"`{field}` debe ser texto")
@@ -288,6 +294,9 @@ class OpenAICompatibleProvider:
         result.setdefault("plan", {})
         result.setdefault("present_rows", False)
         result.setdefault("group_by", [])
+        result.setdefault("filters", [])
+        result.setdefault("query_ids", [])
+        result.setdefault("limit", 20)
         result.setdefault("clarification", {})
         if action == "clarify":
             if not isinstance(result["clarification"], dict):
@@ -305,6 +314,8 @@ class OpenAICompatibleProvider:
                 raise LLMError("La métrica requiere el inicio y fin exclusivo del periodo")
             if not isinstance(result["group_by"], list) or not all(isinstance(item, str) for item in result["group_by"]):
                 raise LLMError("`group_by` debe ser una lista de campos")
+            if not isinstance(result["filters"], list) or not all(isinstance(item, dict) for item in result["filters"]):
+                raise LLMError("`filters` debe ser una lista de filtros estructurados")
         if action == "plan":
             if not isinstance(result["plan"], dict):
                 raise LLMError("`plan` debe ser un objeto")
@@ -319,7 +330,7 @@ class OpenAICompatibleProvider:
                 # do not reject the whole turn over an empty planning field.
                 result["plan"]["metric"] = question.strip() or "Solicitud del usuario"
         if action == "search_tables":
-            if not isinstance(result["offset"], int) or result["offset"] < 0:
+            if isinstance(result["offset"], bool) or not isinstance(result["offset"], int) or result["offset"] < 0:
                 raise LLMError("`offset` debe ser un entero no negativo")
             if not isinstance(result["page_size"], int) or result["page_size"] < 1:
                 raise LLMError("`page_size` debe ser un entero positivo")
@@ -329,6 +340,26 @@ class OpenAICompatibleProvider:
             raise LLMError("`sql` no puede estar vacío")
         if action == "read_page" and not result["query_id"].strip():
             raise LLMError("`query_id` no puede estar vacío")
+        if action == "inspect_result":
+            if not result["query_id"].strip():
+                raise LLMError("`query_id` no puede estar vacío")
+            if result["operation"] not in {"profile", "sample", "column_stats", "top_values"}:
+                raise LLMError("`operation` debe ser profile, sample, column_stats o top_values")
+            if not isinstance(result["column"], str):
+                raise LLMError("`column` debe ser texto")
+            if isinstance(result["offset"], bool) or not isinstance(result["offset"], int) or result["offset"] < 0:
+                raise LLMError("`offset` debe ser un entero no negativo")
+            if isinstance(result["limit"], bool) or not isinstance(result["limit"], int) or not 1 <= result["limit"] <= 100:
+                raise LLMError("`limit` debe estar entre 1 y 100")
+        if action == "create_excel":
+            if not isinstance(result["query_ids"], list) or not all(isinstance(item, str) for item in result["query_ids"]):
+                raise LLMError("`query_ids` debe ser una lista de identificadores")
+            if len(result["query_ids"]) > 20:
+                raise LLMError("Un Excel puede combinar máximo 20 resultados de esta sesión")
+            if not isinstance(result["title"], str):
+                raise LLMError("`title` debe ser texto")
+            if len(result["title"]) > 120:
+                result["title"] = result["title"][:120]
         if action == "finish":
             if not result["answer"].strip():
                 raise LLMError("La respuesta final no puede estar vacía")

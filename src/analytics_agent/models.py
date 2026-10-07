@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -23,6 +24,9 @@ class AgentSettings:
     llm_api_key: str
     bigquery_project: str = "sbscol-dbreplication-prd"
     bigquery_location: str = ""
+    timezone: str = "America/Bogota"
+    export_dir: str = "./exports"
+    evidence_max_chars: int = 40_000
 
     @classmethod
     def from_env(cls) -> "AgentSettings":
@@ -36,12 +40,27 @@ class AgentSettings:
         ) if not value]
         if missing:
             raise ValueError("Faltan variables de entorno: " + ", ".join(missing))
+        timezone = os.environ.get("ANALYTICS_AGENT_TIMEZONE", "America/Bogota").strip()
+        try:
+            ZoneInfo(timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"Zona horaria no válida: {timezone}") from exc
+        export_dir = os.environ.get("ANALYTICS_AGENT_EXPORT_DIR", "./exports").strip() or "./exports"
+        try:
+            evidence_max_chars = int(os.environ.get("ANALYTICS_AGENT_EVIDENCE_MAX_CHARS", "40000"))
+        except ValueError as exc:
+            raise ValueError("ANALYTICS_AGENT_EVIDENCE_MAX_CHARS debe ser un entero") from exc
+        if evidence_max_chars < 1000:
+            raise ValueError("ANALYTICS_AGENT_EVIDENCE_MAX_CHARS debe ser al menos 1000")
         return cls(
             llm_base_url=base_url,
             llm_model=model,
             llm_api_key=api_key,
             bigquery_project=os.environ.get("BQ_JOB_PROJECT", "sbscol-dbreplication-prd").strip(),
             bigquery_location=os.environ.get("BQ_LOCATION", "").strip(),
+            timezone=timezone,
+            export_dir=export_dir,
+            evidence_max_chars=evidence_max_chars,
         )
 
 
@@ -78,3 +97,4 @@ class AgentAnswer:
     audit: tuple[dict[str, Any], ...] = ()
     timings: dict[str, float] = field(default_factory=dict)
     turn_id: str = ""
+    artifacts: tuple[dict[str, Any], ...] = ()

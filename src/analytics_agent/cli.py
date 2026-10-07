@@ -318,6 +318,17 @@ def _render_answer(answer: AgentAnswer, console: Console, presentation: str = "a
                 for column in answer.detail_table.columns
             ))
         console.print(detail_table)
+    if answer.artifacts:
+        artifact_lines = []
+        for artifact in answer.artifacts:
+            if artifact.get("type") == "excel":
+                artifact_lines.append(
+                    f"Excel ({artifact.get('row_count', 0):,} filas): {artifact.get('path', '')}"
+                )
+            elif artifact.get("path"):
+                artifact_lines.append(str(artifact["path"]))
+        if artifact_lines:
+            console.print(Panel("\n".join(artifact_lines), title="Archivo creado", border_style="green"))
     if answer.assumptions:
         console.print(Panel("\n".join(f"• {item}" for item in answer.assumptions), title="Supuestos", border_style="yellow"))
     if answer.learning_updates and presentation == "audit":

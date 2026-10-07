@@ -234,7 +234,10 @@ def load_dictionary(
                 description = ""
                 if description_index is not None and description_index < len(row) and row[description_index] is not None:
                     description = str(row[description_index]).strip()
-                    if description.upper() in {"#N/A", "N/A", "NA"}:
+                    if description.upper() in {
+                        "#N/A", "N/A", "NA", "N.A.", "#VALUE!", "#REF!", "#NULL!",
+                        "#DIV/0!", "#NAME?", "#NUM!", "#VALUE", "NO APLICA",
+                    }:
                         description = ""
                 columns[normalized_name] = ColumnSchema(name, data_type, description)
             tables[_key(table_id)] = TableSchema(

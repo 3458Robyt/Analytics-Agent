@@ -3,6 +3,7 @@
 !.env.example
 .venv/
 venv/
+exports/
 __pycache__/
 *.py[cod]
 *.egg-info/

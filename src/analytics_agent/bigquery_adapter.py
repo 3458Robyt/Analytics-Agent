@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import contextvars
 import hashlib
+import json
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterator, Mapping, Sequence
 from uuid import uuid4
 
 
@@ -236,7 +237,13 @@ class BigQueryAdapter:
         info = self.inspect_table_metadata(table_id)
         return info["actual_schema"], info["location"]
 
-    def dry_run(self, sql: str, *, location: str = "") -> DryRunResult:
+    def dry_run(
+        self,
+        sql: str,
+        *,
+        location: str = "",
+        parameters: Sequence[Mapping[str, Any]] = (),
+    ) -> DryRunResult:
         try:
             from google.cloud import bigquery
         except ImportError as exc:  # pragma: no cover - Workbench dependency
@@ -247,6 +254,8 @@ class BigQueryAdapter:
                 use_query_cache=False,
                 use_legacy_sql=False,
             )
+            if parameters:
+                config.query_parameters = self._query_parameters(bigquery, parameters)
             job = self.client.query(sql, job_config=config, location=location or self.location or None)
             processed = int(job.total_bytes_processed or 0)
             routines = tuple(
@@ -270,16 +279,27 @@ class BigQueryAdapter:
         except Exception as exc:
             return DryRunResult(False, None, _safe_error(exc))
 
-    def execute(self, sql: str, *, location: str = "") -> QueryPage:
+    def execute(
+        self,
+        sql: str,
+        *,
+        location: str = "",
+        parameters: Sequence[Mapping[str, Any]] = (),
+    ) -> QueryPage:
         try:
             from google.cloud import bigquery
         except ImportError as exc:  # pragma: no cover - Workbench dependency
             raise BigQueryError("Instala google-cloud-bigquery") from exc
         try:
             config = bigquery.QueryJobConfig(use_legacy_sql=False)
+            if parameters:
+                config.query_parameters = self._query_parameters(bigquery, parameters)
             request_id = _request_id_context.get()
             if request_id:
-                digest = hashlib.sha256((request_id + "\0" + sql).encode("utf-8")).hexdigest()[:48]
+                canonical_parameters = json.dumps(list(parameters), sort_keys=True, default=str, ensure_ascii=False)
+                digest = hashlib.sha256(
+                    (request_id + "\0" + sql + "\0" + canonical_parameters).encode("utf-8")
+                ).hexdigest()[:48]
                 job_id = "analytics_agent_" + digest
                 try:
                     job = self.client.query(
@@ -315,6 +335,19 @@ class BigQueryAdapter:
         if query_id not in self._pages:
             raise BigQueryError("El identificador de consulta no existe o ya terminó")
         return self._next_page(query_id)
+
+    @staticmethod
+    def _query_parameters(bigquery: Any, parameters: Sequence[Mapping[str, Any]]) -> list[Any]:
+        converted = []
+        for item in parameters:
+            name = str(item["name"])
+            data_type = str(item["type"]).upper()
+            value = item.get("value")
+            if item.get("array"):
+                converted.append(bigquery.ArrayQueryParameter(name, data_type, value))
+            else:
+                converted.append(bigquery.ScalarQueryParameter(name, data_type, value))
+        return converted
 
     def _next_page(self, query_id: str, *, iterator: Any = None) -> QueryPage:
         pages = self._pages[query_id]

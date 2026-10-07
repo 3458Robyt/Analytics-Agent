@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import uuid
+import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -146,11 +147,26 @@ class SessionStore:
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY(owner, table_id)
             );
+            CREATE TABLE IF NOT EXISTS query_results (
+                query_id TEXT PRIMARY KEY,
+                owner TEXT NOT NULL,
+                session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+                turn_id TEXT NOT NULL REFERENCES turns(turn_id) ON DELETE CASCADE,
+                question TEXT NOT NULL,
+                columns_json TEXT NOT NULL,
+                column_types_json TEXT NOT NULL,
+                rows_blob BLOB NOT NULL,
+                sql_text TEXT NOT NULL DEFAULT '',
+                tables_json TEXT NOT NULL DEFAULT '[]',
+                total_rows INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS turns_session_idx ON turns(session_id, turn_number);
             CREATE INDEX IF NOT EXISTS actions_turn_idx ON actions(turn_id, sequence);
             CREATE INDEX IF NOT EXISTS learnings_owner_status_idx ON learnings(owner, status, kind);
             CREATE INDEX IF NOT EXISTS learning_evidence_turn_idx ON learning_evidence(turn_id);
             CREATE INDEX IF NOT EXISTS learning_queue_owner_status_idx ON learning_queue(owner, status, created_at);
+            CREATE INDEX IF NOT EXISTS query_results_session_idx ON query_results(owner, session_id, created_at);
             """
         )
         turn_columns = {
@@ -323,6 +339,112 @@ class SessionStore:
             (self.owner, table_id.strip().lower(), json.dumps(metadata, ensure_ascii=False, default=str), _utc_now()),
         )
         self.connection.commit()
+
+    def save_query_result(
+        self,
+        query_id: str,
+        *,
+        session_id: str,
+        turn_id: str,
+        question: str,
+        columns: Sequence[str],
+        column_types: Mapping[str, str],
+        rows: Sequence[Mapping[str, Any]],
+        sql: str = "",
+        tables: Sequence[str] = (),
+    ) -> None:
+        """Persist complete local result rows for later inspection/export in this session."""
+        if not self.session_exists(session_id):
+            raise ValueError("La sesión no existe en la cuenta actual")
+        row = self.connection.execute(
+            "SELECT 1 FROM turns WHERE turn_id = ? AND session_id = ?",
+            (turn_id, session_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("El turno no pertenece a la sesión indicada")
+        rows_json = json.dumps(list(rows), ensure_ascii=False, default=str, separators=(",", ":"))
+        rows_blob = zlib.compress(rows_json.encode("utf-8"), level=1)
+        now = _utc_now()
+        self.connection.execute(
+            """INSERT INTO query_results(query_id, owner, session_id, turn_id, question, columns_json,
+               column_types_json, rows_blob, sql_text, tables_json, total_rows, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(query_id) DO UPDATE SET question = excluded.question,
+               columns_json = excluded.columns_json, column_types_json = excluded.column_types_json,
+               rows_blob = excluded.rows_blob, sql_text = excluded.sql_text, tables_json = excluded.tables_json,
+               total_rows = excluded.total_rows, created_at = excluded.created_at
+               WHERE query_results.owner = excluded.owner AND query_results.session_id = excluded.session_id""",
+            (
+                query_id,
+                self.owner,
+                session_id,
+                turn_id,
+                question[:2000],
+                json.dumps(list(columns), ensure_ascii=False),
+                json.dumps(dict(column_types), ensure_ascii=False),
+                sqlite3.Binary(rows_blob),
+                sql,
+                json.dumps(list(tables), ensure_ascii=False),
+                len(rows),
+                now,
+            ),
+        )
+        if self.connection.execute("SELECT changes()").fetchone()[0] != 1:
+            self.connection.rollback()
+            raise ValueError("No se pudo asociar el resultado a esta cuenta y sesión")
+        self.connection.commit()
+
+    def get_query_result(self, query_id: str, *, session_id: str) -> dict[str, Any] | None:
+        """Read a complete result only for its owning local account and session."""
+        row = self.connection.execute(
+            """SELECT query_id, turn_id, question, columns_json, column_types_json, rows_blob,
+                      sql_text, tables_json, total_rows, created_at
+               FROM query_results WHERE query_id = ? AND owner = ? AND session_id = ?""",
+            (query_id, self.owner, session_id),
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            rows = json.loads(zlib.decompress(row["rows_blob"]).decode("utf-8"))
+            columns = json.loads(row["columns_json"])
+            column_types = json.loads(row["column_types_json"])
+            tables = json.loads(row["tables_json"])
+        except (ValueError, TypeError, zlib.error, json.JSONDecodeError) as exc:
+            raise ValueError("El resultado local está dañado; vuelve a ejecutar la consulta") from exc
+        return {
+            "query_id": str(row["query_id"]),
+            "turn_id": str(row["turn_id"]),
+            "question": str(row["question"]),
+            "columns": columns,
+            "column_types": column_types,
+            "rows": rows,
+            "sql": str(row["sql_text"]),
+            "tables": tables,
+            "total_rows": int(row["total_rows"]),
+            "created_at": str(row["created_at"]),
+        }
+
+    def recent_query_results(self, session_id: str, *, limit: int = 5) -> list[dict[str, Any]]:
+        """Return small metadata references, never result rows, for current-session context."""
+        if not self.session_exists(session_id):
+            return []
+        rows = self.connection.execute(
+            """SELECT query_id, turn_id, question, columns_json, tables_json, total_rows, created_at
+               FROM query_results WHERE owner = ? AND session_id = ? ORDER BY created_at DESC LIMIT ?""",
+            (self.owner, session_id, max(1, min(limit, 20))),
+        ).fetchall()
+        return [
+            {
+                "query_id": str(row["query_id"]),
+                "turn_id": str(row["turn_id"]),
+                "question": str(row["question"]),
+                "columns": json.loads(row["columns_json"]),
+                "tables": json.loads(row["tables_json"]),
+                "total_rows": int(row["total_rows"]),
+                "created_at": str(row["created_at"]),
+            }
+            for row in rows
+        ]
 
     def invalidate_schema_metadata(self, table_id: str) -> None:
         self.connection.execute(
@@ -828,7 +950,7 @@ class SessionStore:
 
 
 def load_glossary(question: str = "", *, limit: int = 12) -> tuple[str, list[dict[str, Any]]]:
-    """Load and rank the packaged, version-controlled business glossary."""
+    """Rank executable definitions and non-executable sector concepts separately."""
     from importlib.resources import files
 
     glossary_path = files("analytics_agent").joinpath("data", "business_glossary.json")
@@ -837,19 +959,51 @@ def load_glossary(question: str = "", *, limit: int = 12) -> tuple[str, list[dic
     except (OSError, json.JSONDecodeError):
         return "", []
     terms = payload.get("terms", []) if isinstance(payload, dict) else []
-    terms = [term for term in terms if isinstance(term, dict) and term.get("status") == "validated"]
-    question_tokens = set(re.findall(r"[\wÀ-ÿ]+", question.lower(), flags=re.UNICODE))
+    concepts = payload.get("concepts", []) if isinstance(payload, dict) else []
+    references = {
+        str(reference.get("id")): {
+            "title": str(reference.get("title", "")),
+            "url": str(reference.get("url", "")),
+        }
+        for reference in (payload.get("references", []) if isinstance(payload, dict) else [])
+        if isinstance(reference, dict) and reference.get("id") and reference.get("url")
+    }
 
-    def score(term: Mapping[str, Any]) -> int:
-        searchable = " ".join(
-            [str(term.get("term", "")), str(term.get("definition", ""))]
-            + [str(item) for item in term.get("aliases", [])]
-            + [str(item) for item in term.get("tables", [])]
-            + [str(item) for item in term.get("fields", [])]
+    def with_sources(item: dict[str, Any], catalog_type: str) -> dict[str, Any]:
+        entry = {"catalog_type": catalog_type, **item}
+        source_ids = entry.get("source_refs", [])
+        entry["source_material"] = [references[source_id] for source_id in source_ids if source_id in references]
+        return entry
+
+    executable = [
+        with_sources(term, "executable_metric_definition")
+        for term in terms
+        if isinstance(term, dict) and term.get("status") == "validated"
+    ]
+    conceptual = [
+        with_sources(concept, "business_concept_context")
+        for concept in concepts
+        if isinstance(concept, dict) and concept.get("term") and concept.get("definition")
+    ]
+    stop_words = {
+        "de", "del", "la", "el", "los", "las", "un", "una", "por", "para", "con", "sin",
+        "que", "como", "cuál", "cual", "fue", "es", "en", "y", "o", "al", "mi", "su",
+    }
+    question_tokens = {
+        token for token in re.findall(r"[\wÀ-ÿ]+", question.lower(), flags=re.UNICODE)
+        if len(token) > 2 and token not in stop_words
+    }
+
+    def score(entry: Mapping[str, Any]) -> int:
+        term_text = " ".join((str(entry.get("term", "")), *[str(item) for item in entry.get("aliases", [])])).lower()
+        support_text = " ".join(
+            str(entry.get(field, ""))
+            for field in ("definition", "distinct_from", "operational_rule", "tables", "fields", "source", "source_refs")
         ).lower()
-        return sum(1 for token in question_tokens if token and token in searchable)
+        return sum(4 if token in term_text else 1 for token in question_tokens if token in term_text or token in support_text)
 
-    ranked = sorted(terms, key=score, reverse=True)
+    candidates = executable + conceptual
+    ranked = sorted(candidates, key=lambda entry: (score(entry), entry["catalog_type"] == "executable_metric_definition"), reverse=True)
     if question_tokens:
         ranked = [term for term in ranked if score(term) > 0][:limit]
     else:

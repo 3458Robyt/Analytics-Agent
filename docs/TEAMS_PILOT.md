@@ -1,5 +1,7 @@
 # Guía de instalación: Analytics Agent en Microsoft Teams
 
+> **Estado:** integración aplazada mientras no estén disponibles los permisos para configurar servicios de GCP. Para usar el agente ahora, ejecuta `analytics-agent ask` o `analytics-agent chat` directamente en Workbench; no necesitas seguir esta guía ni configurar Teams.
+
 Esta guía lleva el piloto desde el repositorio hasta una conversación privada funcional en Teams. El gateway se ejecuta en Cloud Run. El worker permanece en `sbs-analytics-python-notebook` (Workbench), donde ya funciona el acceso de BigQuery y el proveedor de IA.
 
 ## Arquitectura y recorrido de una pregunta

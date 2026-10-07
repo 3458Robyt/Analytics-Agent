@@ -1,25 +1,306 @@
 {
-  "version": 1,
+  "version": 3,
+  "references": [
+    {
+      "id": "fasecolda_sector_indicators",
+      "title": "Definición de los Indicadores del Sector Asegurador",
+      "url": "https://www.fasecolda.com/definicion-de-los-indicadores-del-sector/"
+    },
+    {
+      "id": "fasecolda_glossary",
+      "title": "Glosario de seguros de Fasecolda",
+      "url": "https://www.fasecolda.com/glosario-abc/"
+    },
+    {
+      "id": "codigo_comercio_seguro",
+      "title": "Código de Comercio de Colombia, Decreto 410 de 1971",
+      "url": "https://www.funcionpublica.gov.co/eva/gestornormativo/norma.php?1226=&i=41102"
+    },
+    {
+      "id": "sfc_coaseguro",
+      "title": "Superintendencia Financiera: concepto sobre coaseguro",
+      "url": "https://www.superfinanciera.gov.co/publicaciones/18590/normativaconceptos-y-jurisprudencia-conceptoshistorico-doctrina-y-conceptos-anteriores-superintendencias-bancaria-y-de-valores-doctrina-y-conceptos-financieros-indice-generalcoaseguro-18590/"
+    },
+    {
+      "id": "fasecolda_coaseguro_code",
+      "title": "Fasecolda, Régimen de Seguros: Código de Comercio, artículos 1094–1095",
+      "url": "https://publicaciones.fasecolda.com/regimen-de-seguros/chapter/p6-c1/"
+    }
+  ],
   "terms": [
     {
       "term": "prima emitida",
       "key": "prima_emitida",
-      "aliases": ["primas emitidas", "prima por ramo"],
-      "definition": "En las consultas confirmadas para esta POC, calcular la prima emitida como SUM(vrprima), usando fecha_emision para el periodo y nombre_ramo_comercial para agrupar por ramo.",
+      "aliases": ["primas emitidas", "prima por ramo", "primas", "producción de primas"],
+      "definition": "Para esta POC, la prima emitida es la suma de vrprima por fecha_emision. Incluye todos los registros del periodo, incluidos endosos, ajustes y anulaciones tal como estén representados en la fuente. El signo almacenado se conserva. Al pedir el ramo comercial se agrupa por nombre_ramo_comercial.",
       "tables": ["centralizacion-datos.analytics_curated.th_primas_final"],
       "fields": ["vrprima", "fecha_emision", "nombre_ramo_comercial"],
       "table_id": "centralizacion-datos.analytics_curated.th_primas_final",
       "value_field": "vrprima",
       "aggregation": "SUM",
       "date_field": "fecha_emision",
-      "time_behavior": "period_flows",
-      "dimensions": {"nombre_ramo_comercial": "ramo"},
+      "time_behavior": "period_flow_by_emission_date",
+      "dimensions": {
+        "nombre_ramo_comercial": {"alias": "ramo", "status": "documented"},
+        "nombre_sucursal": {"alias": "sucursal", "status": "documented"},
+        "cod_sucursal": {"alias": "codigo_sucursal", "status": "documented"},
+        "nombre_intermediario": {"alias": "intermediario", "status": "documented"},
+        "cod_agente": {"alias": "codigo_agente", "status": "documented"},
+        "canal": {"alias": "canal", "status": "documented"},
+        "canal_venta": {"alias": "canal_venta", "status": "documented"},
+        "nueva_renovacion": {"alias": "tipo_negocio", "status": "documented"},
+        "vicepresidencia": {"alias": "vicepresidencia_lob_l1", "status": "documented"},
+        "linea_mayor": {"alias": "linea_mayor_lob_l2", "status": "documented"},
+        "linea_menor": {"alias": "linea_menor_lob_l3", "status": "documented"},
+        "nombre_lob_mor": {"alias": "centro_costo_mor", "status": "documented"},
+        "nombre_ramo_tecnico": {"alias": "ramo_tecnico", "status": "documented"},
+        "tipo_coaseguro": {"alias": "tipo_coaseguro", "status": "documented"},
+        "periodo_facturacion": {"alias": "periodo_facturacion", "status": "documented"},
+        "tipo_poliza": {"alias": "tipo_poliza", "status": "documented"},
+        "nom_clasepoliza": {"alias": "clase_poliza", "status": "documented"},
+        "big_account": {"alias": "big_account", "status": "documented"},
+        "big_account_nombre": {"alias": "big_account_nombre", "status": "documented"},
+        "grupo_empresarial": {"alias": "grupo_empresarial", "status": "documented"},
+        "segmento": {"alias": "segmento", "status": "documented"},
+        "sponsor": {"alias": "sponsor", "status": "documented"},
+        "vendor": {"alias": "vendor", "status": "documented"}
+      },
+      "filter_fields": {
+        "cod_sucursal": {"type": "INT64", "operators": ["eq", "in"]},
+        "cod_ramo_com": {"type": "INT64", "operators": ["eq", "in"]},
+        "cod_agente": {"type": "NUMERIC", "operators": ["eq", "in"]},
+        "nro_poliza": {"type": "NUMERIC", "operators": ["eq", "in"]},
+        "nro_sufijo": {"type": "NUMERIC", "operators": ["eq", "in"]},
+        "big_account": {"type": "INT64", "operators": ["eq", "in"]},
+        "nombre_sucursal": {"type": "STRING", "operators": ["eq", "in", "contains"]},
+        "nombre_ramo_comercial": {"type": "STRING", "operators": ["eq", "in", "contains"]},
+        "nombre_intermediario": {"type": "STRING", "operators": ["eq", "in", "contains"]},
+        "canal": {"type": "STRING", "operators": ["eq", "in", "contains"]},
+        "canal_venta": {"type": "STRING", "operators": ["eq", "in", "contains"]},
+        "nueva_renovacion": {"type": "STRING", "operators": ["eq", "in"]},
+        "vicepresidencia": {"type": "STRING", "operators": ["eq", "in", "contains"]},
+        "linea_mayor": {"type": "STRING", "operators": ["eq", "in", "contains"]},
+        "linea_menor": {"type": "STRING", "operators": ["eq", "in", "contains"]},
+        "nombre_lob_mor": {"type": "STRING", "operators": ["eq", "in", "contains"]},
+        "tipo_coaseguro": {"type": "STRING", "operators": ["eq", "in"]},
+        "tipo_poliza": {"type": "STRING", "operators": ["eq", "in"]},
+        "nom_clasepoliza": {"type": "STRING", "operators": ["eq", "in", "contains"]},
+        "grupo_empresarial": {"type": "STRING", "operators": ["eq", "in", "contains"]},
+        "big_account_nombre": {"type": "STRING", "operators": ["eq", "in", "contains"]},
+        "segmento": {"type": "STRING", "operators": ["eq", "in", "contains"]},
+        "sponsor": {"type": "STRING", "operators": ["eq", "in", "contains"]},
+        "vendor": {"type": "STRING", "operators": ["eq", "in", "contains"]}
+      },
       "alias": "prima_emitida",
-      "movement_policy": "Incluir todos los registros y movimientos del periodo solicitado, sin deduplicar endosos ni excluir ajustes.",
-      "unit": "Usar la moneda almacenada en la fuente; no convertir ni combinar monedas salvo que el usuario lo pida y exista un tipo de cambio definido.",
+      "movement_policy": "Incluir todas las filas del periodo sin deduplicar endosos ni quitar ajustes o anulaciones. Conservar el signo de vrprima y no sumar valor absoluto.",
+      "unit": "La unidad y moneda son las de la columna vrprima. No afirmar COP, convertir ni sumar monedas distintas sin evidencia de la fuente.",
       "status": "validated",
-      "source": "Confirmación explícita del usuario durante la POC: SUM(vrprima) por fecha_emision e incluir todos los movimientos.",
+      "source": "Confirmación explícita del usuario durante la POC: SUM(vrprima), fecha_emision y todos los movimientos.",
       "validated_by": "user"
+    }
+  ],
+  "concepts": [
+    {
+      "key": "prima_emitida_concepto",
+      "term": "prima emitida",
+      "aliases": ["producción", "prima expedida"],
+      "status": "validated_for_poc",
+      "definition": "Valor del amparo asociado a pólizas expedidas. En esta POC su cálculo cuantitativo está confirmado por el usuario como SUM(vrprima) filtrado por fecha_emision.",
+      "distinct_from": ["prima retenida", "prima devengada", "prima cobrada"],
+      "operational_rule": "La tabla contiene movimientos de emisión y sus ajustes; respetar los signos y el rango de emisión solicitado.",
+      "source": "Regla interna confirmada por el usuario; concepto general contrastado con los indicadores sectoriales de Fasecolda.",
+      "source_refs": ["fasecolda_sector_indicators"]
+    },
+    {
+      "key": "prima_retenida",
+      "term": "prima retenida",
+      "aliases": ["primas netas retenidas", "retención de primas"],
+      "status": "documented_sector_concept",
+      "definition": "Para las estadísticas sectoriales consultadas, primas emitidas más primas aceptadas menos primas cedidas. Representa la prima que conserva la aseguradora bajo esa base de reporte.",
+      "distinct_from": ["prima emitida", "prima devengada", "porcentaje de retención"],
+      "operational_rule": "No inferirla de vrprima o de un campo cuyo nombre contenga retención. Confirmar que las aceptaciones y cesiones estén disponibles y que no estén incluidas ya en la cifra base.",
+      "source": "Fasecolda, Definición de los Indicadores del Sector.",
+      "source_refs": ["fasecolda_sector_indicators"]
+    },
+    {
+      "key": "prima_devengada",
+      "term": "prima devengada",
+      "aliases": ["primas devengadas", "prima ganada"],
+      "status": "documented_sector_concept",
+      "definition": "Prima reconocida como ingreso por la cobertura correspondiente al periodo. La referencia sectorial consultada calcula primas retenidas menos constitución de reservas técnicas más liberación de reservas.",
+      "distinct_from": ["prima emitida", "prima retenida", "prima cobrada"],
+      "operational_rule": "No equipararla con vrprima ni repartir prima por días de vigencia sin una metodología contable o actuarial aprobada para la compañía.",
+      "source": "Fasecolda, Definición de los Indicadores del Sector.",
+      "source_refs": ["fasecolda_sector_indicators"]
+    },
+    {
+      "key": "anulacion_y_endoso",
+      "term": "movimientos de póliza",
+      "aliases": ["endoso", "anulación", "ajuste", "movimiento"],
+      "status": "documented_sector_concept",
+      "definition": "Un endoso modifica o aclara condiciones de una póliza. Renovar extiende la cobertura a otro periodo. No son eventos intercambiables ni cada fila representa una póliza distinta.",
+      "distinct_from": ["renovación", "póliza", "sufijo de vigencia", "riesgo"],
+      "operational_rule": "La consulta confirmada de prima emitida incluye los registros del periodo, conservando los ajustes y su signo. No filtrar el primer endoso para decidir si una póliza es nueva.",
+      "source": "Glosario de Fasecolda; diccionario de th_primas_final.",
+      "source_refs": ["fasecolda_glossary"]
+    },
+    {
+      "key": "ramo",
+      "term": "ramo de seguros",
+      "aliases": ["ramo comercial", "ramo técnico", "ramo contable"],
+      "status": "documented_sector_concept",
+      "definition": "Grupo de modalidades de seguro que comparten una naturaleza de riesgo. La compañía también organiza sus fuentes por clasificaciones comercial, técnica y contable, que responden a distintas dimensiones del negocio.",
+      "distinct_from": ["cobertura", "modalidad", "ramo técnico", "ramo contable"],
+      "operational_rule": "En la tabla de primas, ramo sin calificativo usa nombre_ramo_comercial. Si el usuario especifica técnico o contable, usar su dimensión correspondiente si existe; no sustituirlas silenciosamente.",
+      "source": "Glosario de Fasecolda; diccionario de th_primas_final.",
+      "source_refs": ["fasecolda_glossary"]
+    },
+    {
+      "key": "intermediario",
+      "term": "intermediario de seguros",
+      "aliases": ["agente", "agencia", "corredor", "intermediario"],
+      "status": "documented_sector_concept",
+      "definition": "Persona o entidad que promueve o facilita la contratación de seguros. Agente, agencia y corredor son categorías distintas; la fuente puede añadir agrupación, clasificación y disciplina comercial.",
+      "distinct_from": ["tomador", "asegurado", "sponsor", "canal de distribución"],
+      "operational_rule": "En th_primas_final, el diccionario relaciona cod_agente con nombre_intermediario. No aplicar esa correspondencia a las tablas de siniestros sin revisar su propio esquema.",
+      "source": "Glosario de Fasecolda; diccionario de th_primas_final.",
+      "source_refs": ["fasecolda_glossary"]
+    },
+    {
+      "key": "canal",
+      "term": "canal de comercialización y canal de venta",
+      "aliases": ["canal", "canal de distribución", "canal de venta"],
+      "status": "documented_internal_dimensions",
+      "definition": "La tabla de primas mantiene dos columnas distintas: canal y canal_venta. Sponsor, vendor e intermediario también son campos separados.",
+      "distinct_from": ["intermediario", "sponsor", "vendor", "canal_venta"],
+      "operational_rule": "Canal sin calificativo usa canal; canal de venta explícito usa canal_venta. No fusionar ambas dimensiones ni inferir equivalencias a partir de valores parecidos.",
+      "source": "Diccionario de th_primas_final."
+    },
+    {
+      "key": "renovacion",
+      "term": "negocio nuevo y renovación",
+      "aliases": ["nueva", "renovada", "renovación", "nueva o renovada"],
+      "status": "documented_internal_dimension",
+      "definition": "nueva_renovacion es la marca de clasificación nueva/renovada descrita por el diccionario. La numeración de sufijos acompaña las vigencias, pero no reemplaza la marca.",
+      "distinct_from": ["endoso", "sufijo", "fecha de inicio de vigencia"],
+      "operational_rule": "Usar nueva_renovacion para agrupar por tipo de negocio cuando el usuario lo pida; no deducir negocio nuevo a partir de nro_endoso.",
+      "source": "Diccionario de th_primas_final; Fasecolda, renovación del seguro y endoso."
+    },
+    {
+      "key": "lob",
+      "term": "jerarquía LOB",
+      "aliases": ["line of business", "línea de negocio", "vicepresidencia", "línea mayor", "línea menor", "MOR"],
+      "status": "documented_internal_hierarchy",
+      "definition": "El diccionario describe una jerarquía: vicepresidencia/L1, línea mayor/L2, línea menor/L3 y nombre_lob_mor como nivel local más detallado del centro de costos.",
+      "distinct_from": ["ramo", "ramo técnico", "centro de costos"],
+      "operational_rule": "Para LOB genérico, presentar L1–L3 como jerarquía. Incluir el nivel MOR cuando se solicite el detalle local o centro de costos; no tratar nombre_lob_mor como sinónimo de todos los niveles.",
+      "source": "Diccionario de th_primas_final y campos lob_l1/lob_l2/lob_l3 de siniestros."
+    },
+    {
+      "key": "big_account",
+      "term": "marca de cuenta grande",
+      "aliases": ["big account", "cuenta grande", "cuenta estratégica"],
+      "status": "documented_internal_dimension",
+      "definition": "big_account es una marca numérica: 1 identifica registros marcados como cuenta grande y 0 los no marcados. big_account_nombre y grupo_empresarial son dimensiones distintas.",
+      "distinct_from": ["nombre de la cuenta", "grupo empresarial", "volumen de prima"],
+      "operational_rule": "No interpretar la marca como valor, tamaño monetario ni medida financiera. Mantener por separado nulos y códigos no documentados.",
+      "source": "Diccionario de th_primas_final."
+    },
+    {
+      "key": "lob_siniestros",
+      "term": "correspondencia de LOB en siniestros",
+      "aliases": ["lob_l1", "lob_l2", "lob_l3"],
+      "status": "documented_internal_hierarchy",
+      "definition": "En mm_final y mm_final_netos el diccionario documenta lob_l1, lob_l2 y lob_l3 como vicepresidencia, línea mayor y línea menor, respectivamente.",
+      "distinct_from": ["ramo_comercial", "ramo_contable", "centro de costos"],
+      "operational_rule": "Usar campos de cada tabla y verificar existencia en BigQuery antes de construir SQL. No unir tablas usando nombre ni asumir que campos de LOB son ramo.",
+      "source": "Diccionario de mm_final y mm_final_netos."
+    },
+    {
+      "key": "tomador_asegurado_beneficiario",
+      "term": "tomador, asegurado y beneficiario",
+      "aliases": ["cliente", "tomador", "asegurado", "beneficiario"],
+      "status": "documented_sector_concept",
+      "definition": "El tomador, parte del contrato, traslada los riesgos por cuenta propia o ajena. El asegurado y el beneficiario pueden ser personas distintas del tomador y entre sí; su papel depende del contrato y de la cobertura.",
+      "distinct_from": ["intermediario", "agente", "nombre de la persona que reporta el siniestro"],
+      "operational_rule": "Resolver cliente según el contexto. No asumir que nombre_completo, nom_tomador, asegurado o beneficiario identifican la misma persona.",
+      "source": "Código de Comercio, artículos 1037–1045 y 1142; el rol concreto depende de la póliza.",
+      "source_refs": ["codigo_comercio_seguro"]
+    },
+    {
+      "key": "coaseguro_reaseguro",
+      "term": "coaseguro y reaseguro",
+      "aliases": ["coaseguro cedido", "coaseguro aceptado", "reaseguro aceptado", "cesión"],
+      "status": "documented_sector_concept",
+      "definition": "En el coaseguro concurren aseguradoras en el mismo riesgo. En reaseguro, la aseguradora transfiere parte del riesgo a otra entidad. La cesión proporcional puede afectar primas y siniestros; la no proporcional depende de condiciones y límites contractuales.",
+      "distinct_from": ["participación del asegurado", "porcentaje de retención", "participación de compañía"],
+      "operational_rule": "El diccionario describe tipo_coaseguro como una clasificación interna que también contiene reaseguro aceptado. No interpretar la etiqueta como equivalencia jurídica ni asumir que porcentajes complementan 100%.",
+      "source": "Código de Comercio, artículo 1095; concepto de Superintendencia Financiera; glosario de Fasecolda; diccionario interno.",
+      "source_refs": ["codigo_comercio_seguro", "sfc_coaseguro", "fasecolda_coaseguro_code", "fasecolda_glossary"]
+    },
+    {
+      "key": "siniestro_pagado",
+      "term": "siniestros pagados",
+      "aliases": ["pago de siniestros", "pagos", "indemnizaciones pagadas"],
+      "status": "documented_sector_concept",
+      "definition": "Flujos registrados como pagos de siniestros en el periodo y base especificados. No equivalen al costo total incurrido: este último incorpora cambios de reservas y el tratamiento del reaseguro.",
+      "distinct_from": ["incurrido", "reserva actual", "reserva anterior", "pago bruto", "pago neto"],
+      "operational_rule": "Elegir fecha_pago para flujo pagado; distinguirla de fecha_accidente, fecha_aviso y mes_mmalla. Confirmar si el campo es bruto o neto antes de afirmar el alcance.",
+      "source": "Fasecolda, Definición de los Indicadores del Sector; diccionario de mm_final y mm_final_netos."
+    },
+    {
+      "key": "incurrido_sector",
+      "term": "siniestros incurridos netos",
+      "aliases": ["incurrido neto", "costo de siniestros", "siniestros incurridos"],
+      "status": "documented_sector_concept_mapping_unverified",
+      "definition": "En la definición de indicadores sectoriales de Fasecolda, los siniestros incurridos se calculan como siniestros retenidos más el incremento de reservas de siniestros. Esta definición conceptual no determina por sí sola la correspondencia con las columnas ni con la base de datos interna de SBS.",
+      "distinct_from": ["pagos", "variación de reservas", "reserva de cierre", "siniestro bruto"],
+      "operational_rule": "El diccionario de mm_final_netos describe incurrido como variacion + pago. Es una fórmula candidata de esa tabla, no una aprobación de su fecha, grano o signos actuales. Comprobar esquema y significado de mes_mmalla, variacion y pago antes de tratar SUM(incurrido) como resultado de un semestre.",
+      "candidate_table": "centralizacion-datos.analytics_curated.mm_final_netos",
+      "candidate_fields": ["incurrido", "variacion", "pago", "mes_mmalla", "reserva_actual", "reserva_anterior"],
+      "source": "Definición sectorial de Fasecolda y fórmula candidata en el diccionario de mm_final_netos; el mapeo interno requiere validación.",
+      "source_refs": ["fasecolda_sector_indicators"]
+    },
+    {
+      "key": "reservas_y_fecha",
+      "term": "reservas y periodo de corte",
+      "aliases": ["reserva", "reserva anterior", "reserva actual", "mes de cierre", "mes_mmalla"],
+      "status": "documented_concept_candidate_temporal",
+      "definition": "Una reserva es un saldo estimado a una fecha de corte. La diferencia entre saldos puede constituir un movimiento del periodo, pero una reserva de cierre no se suma entre meses para obtener un flujo.",
+      "distinct_from": ["pagos", "primas emitidas", "fecha de ocurrencia", "fecha de aviso"],
+      "operational_rule": "Para saldos, declarar el corte seleccionado. Para cambios de reserva, comprobar que el campo represente la variación entre cortes comparables y el tratamiento de reaperturas, recobros y movimientos.",
+      "source": "Fasecolda, Glosario y Régimen de Seguros; diccionario de mm_final_netos."
+    },
+    {
+      "key": "siniestralidad",
+      "term": "índice de siniestralidad",
+      "aliases": ["ratio de siniestralidad", "loss ratio"],
+      "status": "documented_sector_concept",
+      "definition": "La siniestralidad cuenta compañía de referencia compara siniestros incurridos con primas devengadas en una base y periodo compatibles. Otras métricas pueden usar otro numerador o denominador y deben nombrarse de forma explícita.",
+      "distinct_from": ["siniestros pagados / prima emitida", "frecuencia", "severidad"],
+      "operational_rule": "No calcular la razón si faltan definiciones compatibles de ambos componentes, su base bruta/neta o su periodo. No sumar porcentajes ni promediar ratios sin denominadores.",
+      "source": "Fasecolda, definición sectorial de siniestralidad cuenta compañía.",
+      "source_refs": ["fasecolda_sector_indicators"]
+    },
+    {
+      "key": "moneda_y_porcentaje",
+      "term": "moneda, participación y porcentajes",
+      "aliases": ["COP", "moneda local", "retención", "cesión", "participación compañía"],
+      "status": "documented_concept_candidate_mapping",
+      "definition": "Importes requieren su moneda; porcentajes requieren conocer unidad, numerador y base. Un porcentaje de retención, una cesión y una participación de compañía no son automáticamente equivalentes.",
+      "distinct_from": ["monto de prima", "tasa de cambio", "participación de coaseguro"],
+      "operational_rule": "Afirmar COP solo si esquema, datos o documento de negocio lo respaldan. No convertir ni combinar monedas por similitud de columnas. Validar si porcentajes están entre 0–1 o 0–100 y si aplican a prima, riesgo o siniestro.",
+      "source": "Diccionario de th_primas_final y mm_final; la unidad monetaria requiere confirmación de SBS."
+    },
+    {
+      "key": "filtro_documentacion_incompleta",
+      "term": "descripciones de columnas incompletas",
+      "aliases": ["#N/A", "columna sin descripción", "campo no documentado"],
+      "status": "internal_agent_rule",
+      "definition": "Una columna sin descripción no deja de estar disponible en BigQuery. El nombre y tipo son indicios, no una prueba de su definición financiera.",
+      "distinct_from": ["campo inexistente", "campo con definición validada"],
+      "operational_rule": "Continuar con esquema y consultas candidatas; distinguir definición documentada, inferencia por el nombre y regla confirmada por el usuario. Tratar valores de Excel como #N/A como ausencia de descripción.",
+      "source": "Preferencia explícita del usuario para la POC; esquema y diccionario cargados."
     }
   ]
 }
