@@ -174,6 +174,14 @@ gcloud services enable \
   --project="$PROJECT_ID"
 ```
 
+Si este paso devuelve `Permission denied to enable service` para `serviceusage.services.enable`, tu cuenta no puede activar APIs. Pide a TI que active esas APIs o que te conceda temporalmente `roles/serviceusage.serviceUsageAdmin` en el proyecto; no hace falta que te asignen `Owner`. Si luego Firestore devuelve `PERMISSION_DENIED` al crear la base, TI debe crearla o concederte temporalmente `roles/datastore.owner`. Para activar el TTL se requiere el permiso de actualización de índices/esquemas (`datastore.indexes.update`, también llamado `datastore.schemas.update`), incluido en `roles/datastore.indexAdmin`; `roles/datastore.owner` también lo incluye, pero concede acceso más amplio. [Permisos de Service Usage](https://docs.cloud.google.com/service-usage/docs/enable-disable) · [Permisos Firestore](https://docs.cloud.google.com/iam/docs/roles-permissions/firestore) · [Permisos TTL](https://docs.cloud.google.com/datastore/docs/ttl).
+
+Después de que TI habilite las APIs, confirma el estado antes de continuar:
+
+```bash
+gcloud services list --enabled --project="$PROJECT_ID"
+```
+
 Revisa la base de Firestore antes de crearla:
 
 ```bash
@@ -210,6 +218,8 @@ Crea dos topics. Estos comandos se ejecutan una sola vez; si ya existen, confirm
 gcloud pubsub topics create "$REQUEST_TOPIC" --project="$PROJECT_ID"
 gcloud pubsub topics create "$RESPONSE_TOPIC" --project="$PROJECT_ID"
 ```
+
+Si la terminal siguió ejecutando comandos después de un error anterior, es posible que algunos recursos sí se hayan creado. Compruébalos con `gcloud pubsub topics describe "$REQUEST_TOPIC" --project="$PROJECT_ID"`, `gcloud pubsub topics describe "$RESPONSE_TOPIC" --project="$PROJECT_ID"` y `gcloud pubsub subscriptions describe "$REQUEST_SUB" --project="$PROJECT_ID"`; omite los comandos `create` para cualquier recurso que ya exista.
 
 La suscripción pull de solicitudes la consume Workbench. Se habilita orden por `ordering_key` para mantener juntos los mensajes de una conversación, con plazo de ACK suficiente para una consulta larga:
 
