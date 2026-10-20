@@ -5,6 +5,7 @@ import json
 import re
 import time
 from collections import Counter
+from dataclasses import replace
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Mapping
@@ -19,6 +20,11 @@ from .models import AgentAnswer, AgentSettings, Clarification, SummaryTable, TAB
 from .semantics import MetricDefinitionError, compile_metric_query, load_metric_definitions
 from .schema import ColumnSchema, SchemaCatalog, TableSchema, merge_bigquery_schema
 from .excel_export import export_results_to_excel
+from .claims import (
+    enforce_compiled_claims, explicit_class_choices,
+    observed_class_filter, requested_payment_class, select_payment_classes,
+)
+from .field_resolution import UnknownFieldError, resolve_field, resolve_sql_fields
 
 
 class AnalyticsAgent:
@@ -37,6 +43,7 @@ class AnalyticsAgent:
         self.bigquery = bigquery
         self.settings = settings
         self.metric_definitions = load_metric_definitions()
+        self._class_cache: dict[str, tuple[float, tuple[str, ...]]] = {}
         known_descriptions = {
             "th_primas_final": "Fuente candidata de primas emitidas; validar columnas y periodo mediante SQL.",
             "mm_final": "Fuente candidata de movimientos mensuales de siniestros; validar definición mediante SQL.",
@@ -93,6 +100,8 @@ class AnalyticsAgent:
         table_id: str,
         visiting: set[str] | None = None,
         session_store: Any | None = None,
+        *,
+        force_refresh: bool = False,
     ) -> TableSchema:
         normalized_id = table_id.replace(":", ".").lower()
         if "*" in normalized_id:
@@ -106,7 +115,8 @@ class AnalyticsAgent:
 
         existing = self.catalog.tables.get(normalized_id)
         if (
-            existing
+            not force_refresh
+            and existing
             and existing.metadata_loaded
             and time.monotonic() - getattr(existing, "metadata_loaded_at", 0.0) < 3600
             and existing.table_type.upper() not in {"VIEW", "MATERIALIZED_VIEW"}
@@ -115,7 +125,12 @@ class AnalyticsAgent:
 
         metadata = None
         cache_reader = getattr(session_store, "get_schema_metadata", None)
-        if callable(cache_reader):
+        if force_refresh:
+            self._class_cache.pop(normalized_id, None)
+            invalidator = getattr(session_store, "invalidate_schema_metadata", None)
+            if callable(invalidator):
+                invalidator(table_id)
+        if callable(cache_reader) and not force_refresh:
             metadata = cache_reader(table_id, max_age_seconds=3600)
         if metadata is None:
             metadata = self.bigquery.inspect_table_metadata(table_id)
@@ -134,8 +149,6 @@ class AnalyticsAgent:
         merge_bigquery_schema(self.catalog, {table_id: {"ok": True, **metadata}})
         table = self.catalog.tables.get(normalized_id)
         if table is not None:
-            from dataclasses import replace
-
             table = replace(table, metadata_loaded_at=time.monotonic())
             self.catalog.tables[normalized_id] = table
         if table is None:
@@ -173,6 +186,8 @@ class AnalyticsAgent:
         try:
             tree = parse(sql, read="bigquery")[0]
         except Exception:
+            return False
+        if tree is None:
             return False
         aggregate_nodes = (exp.AggFunc,)
         return any(tree.find_all(*aggregate_nodes)) or bool(tree.find(exp.Group))
@@ -423,6 +438,13 @@ class AnalyticsAgent:
         query_bytes: dict[str, int] = {}
         metric_query_ids: set[str] = set()
         artifacts: list[dict[str, Any]] = []
+        field_notices: list[str] = []
+        unavailable_metadata: set[str] = set()
+        refreshed_schema: set[str] = set()
+        class_replies: dict[str, list[str]] = {}
+        if resumed_turn is not None:
+            key = str(resumed_turn.get("clarification", {}).get("metric_key", ""))
+            class_replies[key] = [str(resumed_turn.get("user_response", ""))]
         analysis_plan: dict[str, Any] | None = {
             "metric": question,
             "period": "El indicado por el usuario; si hay ambigüedad, aplicar y declarar un supuesto razonable.",
@@ -454,6 +476,59 @@ class AnalyticsAgent:
                 sql=query_sql.get(query_id, ""),
                 tables=query_tables.get(query_id, ()),
             )
+
+        def ensure_schema(table_id: str, *, refresh: bool = False) -> TableSchema | None:
+            key = table_id.lower()
+            if key in unavailable_metadata:
+                return None
+            try:
+                return self._ensure_table(table_id, session_store=session_store, force_refresh=refresh)
+            except Exception:
+                # Metadata access is helpful, never a prerequisite for a dry run.
+                unavailable_metadata.add(key)
+                if refresh and key in self.catalog.tables:
+                    self.catalog.tables[key] = replace(self.catalog.tables[key], metadata_loaded=False)
+                return None
+
+        def discover_payment_classes(table_id: str, location: str) -> tuple[str, ...]:
+            nonlocal query_count, bytes_processed, sequence
+            cached = self._class_cache.get(table_id.lower())
+            if cached and time.monotonic() - cached[0] < 3600:
+                return cached[1]
+            checked = validate_sql(
+                f"SELECT DISTINCT clase_pago FROM `{table_id}` "
+                "WHERE LOWER(TRIM(tipo)) = 'pagos' AND clase_pago IS NOT NULL ORDER BY clase_pago",
+                self.catalog,
+            )
+            started = time.perf_counter()
+            dry = self.bigquery.dry_run(checked.sql, location=location)
+            stage_timings["dry_run"] = stage_timings.get("dry_run", 0.0) + time.perf_counter() - started
+            if not dry.ok:
+                raise BigQueryError(dry.error or "No se pudo descubrir clase_pago")
+            started = time.perf_counter()
+            page = first = self.bigquery.execute(checked.sql, location=location)
+            rows = list(page.rows)
+            self._record_page_job(page, query_jobs)
+            while page.has_next_page:
+                page = self.bigquery.read_page(page.query_id)
+                rows.extend(page.rows)
+                self._record_page_job(page, query_jobs)
+            stage_timings["query"] = stage_timings.get("query", 0.0) + time.perf_counter() - started
+            query_count += 1
+            query_sql[first.query_id] = checked.sql
+            query_tables[first.query_id] = checked.tables
+            query_bytes[first.query_id] = int(first.bytes_processed or dry.bytes_processed or 0)
+            bytes_processed = sum(query_bytes.values())
+            tables_used.update(checked.tables)
+            values = tuple(dict.fromkeys(str(row["clase_pago"]) for row in rows if row.get("clase_pago") is not None))
+            self._class_cache[table_id.lower()] = (time.monotonic(), values)
+            sequence += 1
+            result = {"action": "payment_class_values", "table_id": table_id, "values": values,
+                      "sql": checked.sql, "query_id": first.query_id, "all_pages_read": True}
+            if session_store is not None:
+                session_store.log_action(turn_id, sequence, "discover_payment_classes", {"sql": checked.sql}, result)
+            action_history.append(result)
+            return values
 
         def save_explicit_definition(clarification: Clarification, reply: str) -> None:
             if not (session_store is not None and clarification.metric_key and clarification.proposed_rule):
@@ -488,7 +563,7 @@ class AnalyticsAgent:
                 })
             return AgentAnswer(
                 answer="La consulta espera la aclaración de negocio para continuar.",
-                assumptions=tuple(str(item) for item in (analysis_plan or {}).get("assumptions", []) if item),
+                assumptions=tuple(dict.fromkeys([*(str(item) for item in (analysis_plan or {}).get("assumptions", []) if item), *field_notices])),
                 query_count=query_count,
                 tables_used=tuple(sorted(tables_used)),
                 bytes_processed=bytes_processed,
@@ -572,7 +647,7 @@ class AnalyticsAgent:
                 )
                 answer = AgentAnswer(
                     answer=answer_text,
-                    assumptions=tuple(str(item) for item in (analysis_plan or {}).get("assumptions", []) if item),
+                    assumptions=tuple(dict.fromkeys([*(str(item) for item in (analysis_plan or {}).get("assumptions", []) if item), *field_notices])),
                     summary_table=verified_summary,
                     query_count=query_count,
                     tables_used=tuple(sorted(tables_used)),
@@ -682,7 +757,7 @@ class AnalyticsAgent:
                     else:
                         if any(term in metric_text for term in ("prima", "vrprima", "emisi", "ramo")):
                             candidate = TABLE_IDS["th_primas_final"]
-                        elif any(term in metric_text for term in ("incurrido", "siniestro", "reserva", "neto", "pago")):
+                        elif re.search(r"\bnet[oa]s?\b", metric_text):
                             candidate = TABLE_IDS["mm_final_netos"]
                         else:
                             candidate = TABLE_IDS["mm_final"]
@@ -731,6 +806,9 @@ class AnalyticsAgent:
                     if not reply:
                         return pending_clarification_answer(clarification)
                     save_explicit_definition(clarification, reply)
+                    class_replies.setdefault(clarification.metric_key, []).append(reply)
+                    previous_action_id = None
+                    previous_call = None
                     sequence += 1
                     confirmation_event = {
                         "action": "clarification_received",
@@ -830,7 +908,7 @@ class AnalyticsAgent:
                     has_rows = any(result.get("rows") for result in query_data.values())
                     answer_text = (
                         "BigQuery no devolvió filas para el criterio consultado."
-                        if query_count and not has_rows
+                        if query_data and not has_rows
                         else self._result_sentence(action["answer"].strip(), summary, detail_table)
                     )
                     if not accepted:
@@ -844,7 +922,7 @@ class AnalyticsAgent:
 
                     answer = AgentAnswer(
                         answer=answer_text,
-                        assumptions=tuple(action["assumptions"]),
+                        assumptions=tuple(dict.fromkeys([*action["assumptions"], *field_notices])),
                         summary_table=summary,
                         detail_table=detail_table,
                         query_count=query_count,
@@ -1057,20 +1135,123 @@ class AnalyticsAgent:
                         requested_sql = action["sql"]
                         query_parameters: tuple[dict[str, Any], ...] = ()
                         if action["action"] == "run_metric":
+                            if action.get("metric_key") == "pagos_siniestros":
+                                # A generic payments action must not erase an explicit business subset.
+                                requested_class = requested_payment_class(question)
+                                if requested_class:
+                                    action["metric_key"] = requested_class
                             metric_definition = self.metric_definitions.get(str(action.get("metric_key", "")))
                             if metric_definition is None:
                                 raise MetricDefinitionError(
                                     f"No hay una definición confirmada para `{action.get('metric_key', '')}`."
                                 )
+                            metric_definition = dict(metric_definition)
+                            table_id = str(metric_definition["table_id"])
+                            table = ensure_schema(table_id)
+                            required_fields = {metric_definition["value_field"], metric_definition["date_field"]}
+                            required_fields.update(item["field"] for item in metric_definition.get("required_filters", []))
+                            if metric_definition.get("payment_class"):
+                                required_fields.add("clase_pago")
+                            if table and table.metadata_loaded:
+                                aliases = {cfg["alias"]: field for field, cfg in metric_definition.get("dimensions", {}).items()
+                                           if isinstance(cfg, Mapping)}
+                                requested_fields = [*action.get("group_by", []),
+                                                    *(item.get("field", "") for item in action.get("filters", []))]
+                                missing = required_fields - set(table.columns)
+                                unknown = [field for field in requested_fields
+                                           if field.lower() not in table.columns and aliases.get(field) not in table.columns]
+                                if (missing or unknown) and table_id not in refreshed_schema:
+                                    refreshed_schema.add(table_id)
+                                    table = ensure_schema(table_id, refresh=True)
+                            if table and table.metadata_loaded:
+                                missing = required_fields - set(table.columns)
+                                if missing:
+                                    raise MetricDefinitionError(
+                                        "Faltan campos necesarios para la regla confirmada: " + ", ".join(sorted(missing))
+                                        + ". No sustituyas incurrido_total por otro importe."
+                                    )
+                                dimensions = dict(metric_definition.get("dimensions", {}))
+                                filter_fields = dict(metric_definition.get("filter_fields", {}))
+                                for field, column in table.columns.items():
+                                    dtype = column.data_type.split()[0]
+                                    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", field) and dtype in {
+                                        "STRING", "INT64", "INTEGER", "NUMERIC", "BIGNUMERIC", "FLOAT", "FLOAT64",
+                                        "DATE", "BOOL", "BOOLEAN",
+                                    }:
+                                        dimensions.setdefault(field, {"alias": field})
+                                        filter_fields[field] = {**filter_fields.get(field, {}), "type": dtype,
+                                                                "operators": filter_fields.get(field, {}).get("operators", ["eq", "in"])}
+                                metric_definition.update(dimensions=dimensions, filter_fields=filter_fields)
+                                dtype = table.columns[metric_definition["date_field"]].data_type.split()[0]
+                                if dtype not in {"DATE", "TIMESTAMP", "DATETIME"}:
+                                    raise MetricDefinitionError("El campo temporal de la métrica no tiene un tipo compatible")
+                                metric_definition["date_field_type"] = dtype
+                                aliases = {cfg["alias"]: field for field, cfg in dimensions.items() if isinstance(cfg, Mapping)}
+                                def resolve_metric_field(field):
+                                    corrected = resolve_field(field, table, aliases)
+                                    if corrected != field:
+                                        field_notices.append(f"Interpreté `{field}` como el campo comprobado `{corrected}`.")
+                                    return corrected
+                                action["group_by"] = [resolve_metric_field(field) for field in action.get("group_by", [])]
+                                action["filters"] = [{**item, "field": resolve_metric_field(item.get("field", ""))}
+                                                     for item in action.get("filters", [])]
+                            filters = action.get("filters", [])
+                            class_goal = metric_definition.get("payment_class", "")
+                            if class_goal or any(item.get("field") == "clase_pago" for item in filters):
+                                values = discover_payment_classes(table_id, (table.location if table else "") or self.settings.bigquery_location)
+                                filters = observed_class_filter(values, filters)
+                                if class_goal:
+                                    try:
+                                        selected = select_payment_classes(values, class_goal)
+                                    except MetricDefinitionError:
+                                        # Only an explicit user's reply can resolve an ambiguous category.
+                                        explicit = []
+                                        for reply in class_replies.get(str(class_goal), []):
+                                            explicit = explicit_class_choices(reply, values) or explicit
+                                        reader = getattr(session_store, "confirmed_payment_classes", None)
+                                        if not explicit and callable(reader):
+                                            explicit = reader(table_id, str(class_goal))
+                                        if not explicit:
+                                            raise
+                                        selected = select_payment_classes(values, class_goal, explicit=explicit)
+                                        if session_store is not None and class_replies.get(str(class_goal)):
+                                            session_store.confirm_business_definition(
+                                                str(class_goal) + "_clase_pago",
+                                                json.dumps({"kind": "payment_class_mapping", "table_id": table_id,
+                                                            "goal": class_goal, "labels": selected}, ensure_ascii=False),
+                                                "Etiquetas exactas de clase_pago comprobadas en BigQuery",
+                                                class_replies[str(class_goal)][-1],
+                                            )
+                                    metric_definition["required_filters"] = [
+                                        *metric_definition.get("required_filters", []),
+                                        {"field": "clase_pago", "operator": "in", "value": selected},
+                                    ]
+                                action["filters"] = filters
                             metric_query = compile_metric_query(
                                 metric_definition,
                                 start_date=action["start_date"],
                                 end_date=action["end_date"],
                                 group_by=action["group_by"],
-                                filters=action.get("filters", []),
+                                filters=filters,
+                                timezone=self.settings.timezone,
                             )
                             requested_sql = metric_query.sql
                             query_parameters = metric_query.parameters
+                            action["sql"] = requested_sql
+                        else:
+                            # Even technically valid SQL can violate a confirmed financial definition.
+                            enforce_compiled_claims(requested_sql, question_for_model, str(action.get("metric_key", "")))
+                            for table_id in extract_table_ids(requested_sql):
+                                ensure_schema(table_id)
+                            try:
+                                requested_sql, notices = resolve_sql_fields(requested_sql, self.catalog, allow_typo=False)
+                            except UnknownFieldError as field_error:
+                                if field_error.table_id in refreshed_schema:
+                                    raise
+                                refreshed_schema.add(field_error.table_id)
+                                ensure_schema(field_error.table_id, refresh=True)
+                                requested_sql, notices = resolve_sql_fields(requested_sql, self.catalog)
+                            field_notices.extend(notices)
                             action["sql"] = requested_sql
                         validated = validate_sql(requested_sql, self.catalog)
                         locations = {
@@ -1090,6 +1271,11 @@ class AnalyticsAgent:
                             dry_run = self.bigquery.dry_run(validated.sql, location=location)
                         stage_timings["dry_run"] = stage_timings.get("dry_run", 0.0) + time.perf_counter() - stage_started
                         if not dry_run.ok:
+                            if any(token in (dry_run.error or "").lower() for token in ("unrecognized name", "not found inside", "no such field")):
+                                for table_id in validated.tables:
+                                    if table_id not in refreshed_schema:
+                                        refreshed_schema.add(table_id)
+                                        ensure_schema(table_id, refresh=True)
                             raise BigQueryError(dry_run.error or "El dry run de BigQuery no fue aprobado")
                         stage_started = time.perf_counter()
                         if query_parameters:
@@ -1153,6 +1339,9 @@ class AnalyticsAgent:
                             "estimated_bytes": dry_run.bytes_processed,
                             "sql": validated.sql,
                             "tables": list(validated.tables),
+                            "field_corrections": list(dict.fromkeys(field_notices)),
+                            "query_parameters": list(query_parameters),
+                            "metric_key": action.get("metric_key", ""),
                         }
                     else:  # read_page
                         requested_query_id = action["query_id"]
@@ -1187,7 +1376,7 @@ class AnalyticsAgent:
                         action["action"],
                         action,
                         tool_result,
-                        aggregate=action["action"] == "run_select" and self._is_aggregate(str(action.get("sql", "")))
+                        aggregate=action["action"] in {"run_select", "run_metric"} and self._is_aggregate(str(action.get("sql", "")))
                         or action["action"] == "read_page" and action.get("query_id") in aggregate_query_ids,
                     )
                 result_id = self._fingerprint({key: value for key, value in tool_result.items() if key != "rows"})

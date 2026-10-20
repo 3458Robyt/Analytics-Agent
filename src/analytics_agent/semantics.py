@@ -7,6 +7,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from importlib.resources import files
 from typing import Any, Mapping
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .models import ProposalError
 
@@ -28,14 +29,30 @@ def load_metric_definitions() -> dict[str, dict[str, Any]]:
     except (OSError, json.JSONDecodeError):
         return {}
     terms = payload.get("terms", []) if isinstance(payload, Mapping) else []
-    return {
+    entries = {
         str(term["key"]): dict(term)
         for term in terms
         if isinstance(term, Mapping)
         and term.get("status") == "validated"
         and isinstance(term.get("key"), str)
-        and all(term.get(field) for field in ("table_id", "value_field", "aggregation", "date_field"))
     }
+    resolved: dict[str, dict[str, Any]] = {}
+
+    def resolve(key: str, stack: tuple[str, ...] = ()) -> dict[str, Any]:
+        if key in stack or key not in entries:
+            raise MetricDefinitionError("Herencia inválida en el glosario de métricas")
+        entry = entries[key]
+        parent = resolve(str(entry["extends"]), (*stack, key)) if entry.get("extends") else {}
+        result = {**parent, **entry}
+        result.pop("extends", None)
+        if not all(result.get(field) for field in ("table_id", "value_field", "aggregation", "date_field")):
+            raise MetricDefinitionError(f"La definición de `{key}` está incompleta")
+        resolved[key] = result
+        return result
+
+    for key in entries:
+        resolve(key)
+    return resolved
 
 
 def compile_metric_sql(
@@ -45,6 +62,7 @@ def compile_metric_sql(
     end_date: str,
     group_by: list[str] | tuple[str, ...] = (),
     filters: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] = (),
+    timezone: str = "America/Bogota",
 ) -> str:
     """Compile a metric with identifiers and filter values from its allowlists."""
     return compile_metric_query(
@@ -53,6 +71,7 @@ def compile_metric_sql(
         end_date=end_date,
         group_by=group_by,
         filters=filters,
+        timezone=timezone,
     ).sql
 
 
@@ -63,6 +82,7 @@ def compile_metric_query(
     end_date: str,
     group_by: list[str] | tuple[str, ...] = (),
     filters: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] = (),
+    timezone: str = "America/Bogota",
 ) -> MetricQuery:
     """Compile a confirmed metric and typed, allowlisted query parameters."""
     try:
@@ -101,15 +121,43 @@ def compile_metric_query(
         raise MetricDefinitionError("La definición contiene un alias inválido")
     projection = [f"`{field}` AS `{alias}`" for field, alias in dimensions]
     projection.append(f"{aggregation}(`{value_field}`) AS `{metric_alias}`")
-    where = [
-        f"`{date_field}` >= DATE '{start.isoformat()}'",
-        f"`{date_field}` < DATE '{end.isoformat()}'",
-    ]
+    bounds = [f"DATE '{day.isoformat()}'" for day in (start, end)]
+    if definition.get("date_field_type", "DATE").upper() == "TIMESTAMP":
+        # A closing month is a calendar label, not an instant to move into the previous month.
+        calendar_zone = "UTC" if definition.get("time_behavior") == "closing_month_sum" else timezone
+        try:
+            ZoneInfo(calendar_zone)
+        except (ValueError, ZoneInfoNotFoundError) as exc:
+            raise MetricDefinitionError("La zona horaria de la métrica no es válida") from exc
+        if not re.fullmatch(r"[A-Za-z0-9_+./-]+", calendar_zone):
+            raise MetricDefinitionError("La zona horaria de la métrica no es válida")
+        bounds = [f"TIMESTAMP({bound}, '{calendar_zone}')" for bound in bounds]
+    elif definition.get("date_field_type", "DATE").upper() == "DATETIME":
+        bounds = [f"DATETIME({bound})" for bound in bounds]
+    where = [f"`{date_field}` >= {bounds[0]}", f"`{date_field}` < {bounds[1]}"]
     parameters: list[dict[str, Any]] = []
     filter_fields = definition.get("filter_fields", {})
     if filters and not isinstance(filter_fields, Mapping):
         raise MetricDefinitionError("La métrica no tiene campos de filtro permitidos")
-    for index, item in enumerate(filters):
+    required = definition.get("required_filters", [])
+    if not isinstance(required, (list, tuple)) or not all(isinstance(item, Mapping) for item in required):
+        raise MetricDefinitionError("Los filtros obligatorios de la métrica no son válidos")
+    for item in filters:
+        if not isinstance(item, Mapping):
+            raise MetricDefinitionError("Cada filtro debe incluir campo, operador y valor")
+        for fixed in required:
+            if item.get("field") != fixed.get("field"):
+                continue
+            config = filter_fields.get(str(item.get("field")), {})
+            def values(part):
+                raw = part.get("value")
+                raw = raw if part.get("operator", "eq") == "in" and isinstance(raw, (list, tuple)) else [raw]
+                if config.get("normalize") == "lower_trim":
+                    return {str(value).strip().lower() for value in raw}
+                return {str(value) for value in raw}
+            if item.get("operator", "eq") not in {"eq", "in"} or not values(item).issubset(values(fixed)):
+                raise MetricDefinitionError(f"El filtro `{item.get('field')}` contradice la definición confirmada")
+    for index, item in enumerate([*required, *filters]):
         if not isinstance(item, Mapping):
             raise MetricDefinitionError("Cada filtro debe incluir campo, operador y valor")
         field = str(item.get("field", ""))
@@ -121,6 +169,11 @@ def compile_metric_query(
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", field):
             raise MetricDefinitionError("El filtro contiene un nombre de campo inválido")
         data_type = str(config.get("type", "")).upper()
+        field_sql = f"`{field}`"
+        if config.get("normalize") == "lower_trim":
+            if data_type != "STRING":
+                raise MetricDefinitionError("Solo se normalizan filtros de texto")
+            field_sql = f"LOWER(TRIM(`{field}`))"
         allowed_operators = {str(op).lower() for op in config.get("operators", ["eq"])}
         if operator not in allowed_operators or operator not in {"eq", "in", "contains", "gte", "lte", "is_null"}:
             raise MetricDefinitionError(f"El operador `{operator}` no está permitido para `{field}`")
@@ -135,11 +188,15 @@ def compile_metric_query(
             if not isinstance(value, (list, tuple)) or not value or len(value) > 100:
                 raise MetricDefinitionError("El filtro `in` requiere entre 1 y 100 valores")
             converted = [_typed_value(data_type, part) for part in value]
+            if config.get("normalize") == "lower_trim":
+                converted = [part.strip().lower() for part in converted]
             name = f"metric_filter_{index}"
             parameters.append({"name": name, "type": data_type, "value": converted, "array": True})
-            where.append(f"`{field}` IN UNNEST(@{name})")
+            where.append(f"{field_sql} IN UNNEST(@{name})")
             continue
         converted = _typed_value(data_type, value)
+        if config.get("normalize") == "lower_trim":
+            converted = converted.strip().lower()
         if operator == "contains":
             name = f"metric_filter_{index}"
             parameters.append({"name": name, "type": "STRING", "value": converted})
@@ -148,7 +205,7 @@ def compile_metric_query(
             name = f"metric_filter_{index}"
             parameters.append({"name": name, "type": data_type, "value": converted})
             sql_operator = {"eq": "=", "gte": ">=", "lte": "<="}[operator]
-            where.append(f"`{field}` {sql_operator} @{name}")
+            where.append(f"{field_sql} {sql_operator} @{name}")
 
     sql = (
         "SELECT " + ", ".join(projection)

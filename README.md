@@ -111,6 +111,33 @@ analytics-agent chat --resume ID_SESION
 
 En Workbench usa `analytics-agent ask "pregunta"` para una consulta puntual o `analytics-agent chat` para mantener el contexto entre preguntas. Teams está aplazado: no necesitas configurar Pub/Sub, Cloud Run, Firestore ni variables `TEAMS_*` para ejecutar esta POC.
 
+## Reglas de pagos y reservas
+
+Las consultas generales de siniestros usan `centralizacion-datos.analytics_curated.mm_final` y suman **`incurrido_total`**, conservando signos y todos los registros del periodo:
+
+| Métrica (`metric_key`) | Valor de `tipo` | Fecha |
+| --- | --- | --- |
+| `pagos_siniestros` | Pagos | `fecha_pago` |
+| `reservas_avisadas` | Avisado | `mes_mmalla` |
+| `avisos_recobro` | aviso de recobro | `mes_mmalla` |
+| `avisados_salvamentos` | avisado de salvamentos | `mes_mmalla` |
+
+Las reservas de varios meses suman todo el rango solicitado. Recobros y salvamentos se muestran por separado y no se restan automáticamente de pagos ni de reservas. Esta definición interna de reservas avisadas no certifica un saldo actuarial al último corte. Las consultas explícitamente netas requieren verificar su propio mapeo; estas reglas no se trasladan automáticamente a `mm_final_netos`.
+
+`honorarios` e `indemnizaciones` aplican además un filtro sobre **valores reales de `clase_pago`**. El agente consulta las etiquetas antes de filtrarlas y las guarda en una caché de una hora durante el proceso. Si su significado es ambiguo, pide las etiquetas exactas. La clase de indemnización identifica el concepto y no demuestra por sí sola quién recibió el dinero.
+
+Ejemplos desde la terminal de Workbench:
+
+```bash
+analytics-agent ask "Total de pagos de septiembre de 2026 por ramo"
+analytics-agent ask "Reservas avisadas del primer semestre de 2026"
+analytics-agent ask "Honorarios pagados en septiembre de 2026"
+analytics-agent ask "Indemnizaciones pagadas en septiembre de 2026"
+analytics-agent ask "Avisos de recobro y avisados de salvamentos de septiembre de 2026, separados"
+```
+
+El glosario vigente se impone sobre procedimientos antiguos de la memoria. Los nombres de campos escritos en la pregunta se comprueban con el esquema de BigQuery o con el dry run: una errata inequívoca se corrige y se comunica; varias equivalencias requieren aclaración. Una descripción faltante no bloquea una columna existente. Para fechas de pago TIMESTAMP se usa `ANALYTICS_AGENT_TIMEZONE` (por defecto `America/Bogota`); `mes_mmalla` conserva el mes de cierre almacenado sin desplazarlo de mes por la zona horaria.
+
 ## Memoria y glosario
 
 La CLI guarda automáticamente sesiones, preguntas, respuestas, SQL, resultados agregados y referencias a trabajos de BigQuery en SQLite. Los resultados completos se guardan localmente comprimidos para que el agente pueda analizarlos o exportarlos después dentro de la misma sesión; no se guardan en un servicio compartido. Por defecto el archivo está en `~/.local/share/analytics-agent/state.sqlite3`; los permisos locales se restringen a la cuenta del runtime. `ANALYTICS_AGENT_STATE_DIR` permite cambiar la carpeta. `/clear` inicia otra sesión y conserva las anteriores; usa `/new` para lo mismo.

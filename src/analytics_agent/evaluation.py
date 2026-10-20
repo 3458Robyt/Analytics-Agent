@@ -24,6 +24,10 @@ class CaseResult:
     total_tokens: int
 
 
+def _normalized_sql(sql: str) -> str:
+    return sql.replace("`", "").lower()
+
+
 class FixtureBigQuery:
     """A deterministic BigQuery stand-in that only accepts the SQL required by a case."""
 
@@ -33,24 +37,29 @@ class FixtureBigQuery:
         self.case = case
         self.queries: list[str] = []
         self.executed_sql: list[str] = []
+        self.executed_parameters: list[dict[str, Any]] = []
         self._remaining_rows: list[dict[str, Any]] = []
         self._query_id = "evaluation-query"
 
-    def dry_run(self, sql: str, *, location: str = "") -> DryRunResult:
+    def dry_run(self, sql: str, *, location: str = "", parameters=()) -> DryRunResult:
         self.queries.append(sql)
-        normalized = sql.lower()
+        normalized = _normalized_sql(sql)
         missing = [fragment for fragment in self.case.get("required_sql_fragments", [])
-                   if str(fragment).lower() not in normalized]
+                   if _normalized_sql(str(fragment)) not in normalized]
         forbidden = [fragment for fragment in self.case.get("forbidden_sql_fragments", [])
-                     if str(fragment).lower() in normalized]
+                     if _normalized_sql(str(fragment)) in normalized]
         if missing:
             return DryRunResult(False, 0, "Faltan componentes esperados en el SQL: " + ", ".join(missing))
         if forbidden:
             return DryRunResult(False, 0, "El SQL contiene componentes excluidos en la evaluación: " + ", ".join(forbidden))
+        supplied = {item["name"]: item["value"] for item in parameters}
+        if any(supplied.get(name) != value for name, value in self.case.get("required_parameters", {}).items()):
+            return DryRunResult(False, 0, "Faltan los parámetros esperados para los filtros de la métrica")
         return DryRunResult(True, 4096)
 
-    def execute(self, sql: str, *, location: str = "") -> QueryPage:
+    def execute(self, sql: str, *, location: str = "", parameters=()) -> QueryPage:
         self.executed_sql.append(sql)
+        self.executed_parameters.append({item["name"]: item["value"] for item in parameters})
         rows = [dict(row) for row in self.case.get("result_rows", [])]
         self._remaining_rows = []
         if self.case.get("expect_detail_rows") and len(rows) > 1:
@@ -104,6 +113,8 @@ def _catalog_for_case(case: Mapping[str, Any]) -> SchemaCatalog:
         "vrprima": ColumnSchema("vrprima", "FLOAT64", "Prima emitida"),
         "nombre_ramo_comercial": ColumnSchema("nombre_ramo_comercial", "STRING", "Ramo comercial"),
     }
+    if case.get("source_schema"):
+        columns = {name: ColumnSchema(name, dtype) for name, dtype in case["source_schema"].items()}
     table = TableSchema(
         sheet_name="evaluation_fixture",
         table_id=table_id,
@@ -164,15 +175,18 @@ def evaluate_case(
                           tuple(bigquery.executed_sql or bigquery.queries), "", 0)
 
     failures: list[str] = []
-    sql_text = "\n".join(bigquery.executed_sql).lower()
+    sql_text = _normalized_sql("\n".join(bigquery.executed_sql))
     if not bigquery.executed_sql:
         failures.append("No se ejecutó ninguna consulta.")
     for fragment in case.get("required_sql_fragments", []):
-        if str(fragment).lower() not in sql_text:
+        if _normalized_sql(str(fragment)) not in sql_text:
             failures.append(f"Falta SQL requerido: {fragment}")
     for fragment in case.get("forbidden_sql_fragments", []):
-        if str(fragment).lower() in sql_text:
+        if _normalized_sql(str(fragment)) in sql_text:
             failures.append(f"Apareció SQL excluido: {fragment}")
+    required_parameters = case.get("required_parameters", {})
+    if required_parameters and not any(all(params.get(k) == v for k, v in required_parameters.items()) for params in bigquery.executed_parameters):
+        failures.append("No se aplicaron los parámetros esperados en la consulta ejecutada.")
     table_id = str(case.get("table_id", "")).lower()
     if table_id not in {table.lower() for table in answer.tables_used}:
         failures.append("No se consultó la tabla esperada.")

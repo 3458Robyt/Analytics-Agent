@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "cases": [
     {
       "id": "prima_s1_por_ramo",
@@ -33,6 +33,30 @@
         {"fecha_emision": "2026-01-29", "ramo": "AUTOS", "vrprima": 1800.0}
       ],
       "expect_detail_rows": true
+    },
+    {
+      "id": "pagos_septiembre_por_fecha_pago",
+      "question": "Calcula el total de pagos de septiembre de 2026.",
+      "table_id": "centralizacion-datos.analytics_curated.mm_final",
+      "source_schema": {"incurrido_total": "FLOAT64", "tipo": "STRING", "fecha_pago": "TIMESTAMP", "mes_mmalla": "TIMESTAMP", "clase_pago": "STRING"},
+      "required_sql_fragments": ["SUM(incurrido_total)", "fecha_pago", "LOWER(TRIM(tipo))", "2026-09-01", "2026-10-01"],
+      "forbidden_sql_fragments": ["SUM(pago_moneda_local)", "mes_mmalla >=", "ABS(", "LIMIT"],
+      "required_parameters": {"metric_filter_0": "pagos"},
+      "result_columns": ["pagos_siniestros"],
+      "result_rows": [{"pagos_siniestros": 155}],
+      "expect_detail_rows": false
+    },
+    {
+      "id": "reservas_suma_varios_meses",
+      "question": "Calcula las reservas avisadas de septiembre y octubre de 2026, sumando ambos meses.",
+      "table_id": "centralizacion-datos.analytics_curated.mm_final",
+      "source_schema": {"incurrido_total": "FLOAT64", "tipo": "STRING", "fecha_pago": "TIMESTAMP", "mes_mmalla": "TIMESTAMP"},
+      "required_sql_fragments": ["SUM(incurrido_total)", "mes_mmalla", "LOWER(TRIM(tipo))", "2026-09-01", "2026-11-01"],
+      "forbidden_sql_fragments": ["MAX(mes_mmalla)", "fecha_pago >=", "ABS(", "LIMIT"],
+      "required_parameters": {"metric_filter_0": "avisado"},
+      "result_columns": ["reservas_avisadas"],
+      "result_rows": [{"reservas_avisadas": 250}],
+      "expect_detail_rows": false
     }
   ]
 }

@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "references": [
     {
       "id": "fasecolda_sector_indicators",
@@ -97,6 +97,105 @@
       "status": "validated",
       "source": "Confirmación explícita del usuario durante la POC: SUM(vrprima), fecha_emision y todos los movimientos.",
       "validated_by": "user"
+    },
+    {
+      "key": "pagos_siniestros",
+      "term": "pagos de siniestros",
+      "aliases": ["pagos", "siniestros pagados", "total pagado"],
+      "status": "validated",
+      "definition": "Regla interna: sumar incurrido_total exclusivamente donde tipo sea Pagos, por fecha_pago. Incluir todas las clases de pago salvo filtro explícito; honorarios e indemnizaciones son subconjuntos distintos. Conservar signos y todas las filas, sin descontar recobros ni salvamentos.",
+      "table_id": "centralizacion-datos.analytics_curated.mm_final",
+      "tables": ["centralizacion-datos.analytics_curated.mm_final"],
+      "fields": ["incurrido_total", "tipo", "fecha_pago", "clase_pago"],
+      "value_field": "incurrido_total",
+      "aggregation": "SUM",
+      "date_field": "fecha_pago",
+      "date_field_type": "TIMESTAMP",
+      "time_behavior": "payment_date_flow",
+      "alias": "pagos_siniestros",
+      "required_filters": [{"field": "tipo", "operator": "eq", "value": "Pagos"}],
+      "dimensions": {
+        "ramo_comercial": {"alias": "ramo"},
+        "descripcion_ramo_com": {"alias": "descripcion_ramo"},
+        "cod_ramo_com": {"alias": "codigo_ramo"},
+        "cod_sucursal": {"alias": "codigo_sucursal"},
+        "clase_pago": {"alias": "clase_pago"},
+        "tipo": {"alias": "tipo"},
+        "lob_l1": {"alias": "vicepresidencia"},
+        "lob_l2": {"alias": "linea_mayor"},
+        "lob_l3": {"alias": "linea_menor"},
+        "nombre_agente": {"alias": "intermediario"},
+        "nom_canaldistr": {"alias": "canal"},
+        "moneda": {"alias": "moneda"}
+      },
+      "filter_fields": {
+        "tipo": {"type": "STRING", "operators": ["eq", "in"], "normalize": "lower_trim"},
+        "clase_pago": {"type": "STRING", "operators": ["eq", "in"]},
+        "ramo_comercial": {"type": "STRING", "operators": ["eq", "in", "contains"]},
+        "descripcion_ramo_com": {"type": "STRING", "operators": ["eq", "in", "contains"]},
+        "nombre_agente": {"type": "STRING", "operators": ["eq", "in", "contains"]},
+        "lob_l1": {"type": "STRING", "operators": ["eq", "in", "contains"]},
+        "lob_l2": {"type": "STRING", "operators": ["eq", "in", "contains"]},
+        "lob_l3": {"type": "STRING", "operators": ["eq", "in", "contains"]},
+        "moneda": {"type": "STRING", "operators": ["eq", "in"]}
+      },
+      "movement_policy": "Sumar todas las filas seleccionadas conservando los signos, sin deduplicar ni netear otras categorías.",
+      "unit": "Conservar la unidad de incurrido_total; no afirmar moneda ni base neta sin evidencia.",
+      "source": "Regla interna y fechas confirmadas por el usuario el 2026-10-20.",
+      "validated_by": "user"
+    },
+    {
+      "extends": "pagos_siniestros",
+      "key": "reservas_avisadas",
+      "term": "reservas avisadas",
+      "aliases": ["reservas", "reserva", "avisado"],
+      "status": "validated",
+      "definition": "Regla interna: SUM(incurrido_total) donde tipo sea Avisado, por mes_mmalla. Sumar todos los meses solicitados, sin sustituirlo por el último corte. Este indicador interno no certifica un saldo actuarial de cierre. No descontar recobros o salvamentos.",
+      "fields": ["incurrido_total", "tipo", "mes_mmalla"],
+      "date_field": "mes_mmalla",
+      "time_behavior": "closing_month_sum",
+      "alias": "reservas_avisadas",
+      "required_filters": [{"field": "tipo", "operator": "eq", "value": "Avisado"}]
+    },
+    {
+      "extends": "reservas_avisadas",
+      "key": "avisos_recobro",
+      "term": "avisos de recobro",
+      "aliases": ["aviso de recobro", "recobros", "recobro"],
+      "status": "validated",
+      "definition": "SUM(incurrido_total) donde tipo sea aviso de recobro, por mes_mmalla. Categoría separada: no descontarla automáticamente de pagos o reservas ni presentarla como recobro efectivamente cobrado.",
+      "alias": "avisos_recobro",
+      "required_filters": [{"field": "tipo", "operator": "eq", "value": "aviso de recobro"}]
+    },
+    {
+      "extends": "reservas_avisadas",
+      "key": "avisados_salvamentos",
+      "term": "avisados de salvamentos",
+      "aliases": ["avisado de salvamentos", "salvamentos", "salvamento"],
+      "status": "validated",
+      "definition": "SUM(incurrido_total) donde tipo sea avisado de salvamentos, por mes_mmalla. Categoría separada: no descontarla automáticamente de pagos o reservas ni equipararla con salvamentos recuperados.",
+      "alias": "avisados_salvamentos",
+      "required_filters": [{"field": "tipo", "operator": "eq", "value": "avisado de salvamentos"}]
+    },
+    {
+      "extends": "pagos_siniestros",
+      "key": "honorarios",
+      "term": "honorarios pagados",
+      "aliases": ["honorarios", "pago de honorarios"],
+      "status": "validated",
+      "definition": "Subconjunto de pagos: SUM(incurrido_total), tipo Pagos, fecha_pago y las clases de honorarios observadas en clase_pago. Descubrir las etiquetas antes de filtrar y pedir aclaración si son ambiguas.",
+      "payment_class": "honorarios",
+      "alias": "honorarios"
+    },
+    {
+      "extends": "pagos_siniestros",
+      "key": "indemnizaciones",
+      "term": "indemnizaciones pagadas",
+      "aliases": ["indemnizaciones", "indemnización", "pagado al asegurado", "pago al asegurado"],
+      "status": "validated",
+      "definition": "Subconjunto de pagos: SUM(incurrido_total), tipo Pagos, fecha_pago y las clases de indemnización observadas en clase_pago. No equiparar con todos los pagos. La clase identifica el concepto, no demuestra la identidad de quien recibió el dinero.",
+      "payment_class": "indemnizaciones",
+      "alias": "indemnizaciones"
     }
   ],
   "concepts": [
@@ -241,11 +340,11 @@
     {
       "key": "siniestro_pagado",
       "term": "siniestros pagados",
-      "aliases": ["pago de siniestros", "pagos", "indemnizaciones pagadas"],
+      "aliases": ["pago de siniestros", "pagos"],
       "status": "documented_sector_concept",
       "definition": "Flujos registrados como pagos de siniestros en el periodo y base especificados. No equivalen al costo total incurrido: este último incorpora cambios de reservas y el tratamiento del reaseguro.",
       "distinct_from": ["incurrido", "reserva actual", "reserva anterior", "pago bruto", "pago neto"],
-      "operational_rule": "Elegir fecha_pago para flujo pagado; distinguirla de fecha_accidente, fecha_aviso y mes_mmalla. Confirmar si el campo es bruto o neto antes de afirmar el alcance.",
+      "operational_rule": "Para esta POC prevalece pagos_siniestros: incurrido_total, tipo Pagos y fecha_pago. Las indemnizaciones requieren identificar clase_pago; no son sinónimo del total de pagos. La regla no confirma bases netas de otras tablas.",
       "source": "Fasecolda, Definición de los Indicadores del Sector; diccionario de mm_final y mm_final_netos."
     },
     {
@@ -268,7 +367,7 @@
       "status": "documented_concept_candidate_temporal",
       "definition": "Una reserva es un saldo estimado a una fecha de corte. La diferencia entre saldos puede constituir un movimiento del periodo, pero una reserva de cierre no se suma entre meses para obtener un flujo.",
       "distinct_from": ["pagos", "primas emitidas", "fecha de ocurrencia", "fecha de aviso"],
-      "operational_rule": "Para saldos, declarar el corte seleccionado. Para cambios de reserva, comprobar que el campo represente la variación entre cortes comparables y el tratamiento de reaperturas, recobros y movimientos.",
+      "operational_rule": "Para reservas genéricas de esta POC prevalece reservas_avisadas: sumar incurrido_total con tipo Avisado por todos los meses de mes_mmalla solicitados. No reemplazar esa regla interna por un último corte. Para una solicitud explícita de saldo actuarial, distinguirla de esta suma de registros avisados.",
       "source": "Fasecolda, Glosario y Régimen de Seguros; diccionario de mm_final_netos."
     },
     {

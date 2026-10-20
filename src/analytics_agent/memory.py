@@ -314,6 +314,23 @@ class SessionStore:
         self.connection.commit()
         return cursor.rowcount > 0
 
+    def confirmed_payment_classes(self, table_id: str, goal: str) -> list[str]:
+        """Read an explicit class mapping; callers must recheck the observed labels."""
+        row = self.connection.execute(
+            "SELECT proposed_rule FROM business_definitions WHERE owner = ? AND metric_key = ? AND status = 'active'",
+            (self.owner, goal + "_clase_pago"),
+        ).fetchone()
+        if row is None:
+            return []
+        try:
+            rule = json.loads(row["proposed_rule"])
+        except (TypeError, json.JSONDecodeError):
+            return []
+        if not isinstance(rule, dict) or rule.get("kind") != "payment_class_mapping" or rule.get("table_id") != table_id or rule.get("goal") != goal:
+            return []
+        labels = rule.get("labels", [])
+        return labels if isinstance(labels, list) and all(isinstance(value, str) for value in labels) else []
+
     def get_schema_metadata(self, table_id: str, *, max_age_seconds: int = 3600) -> dict[str, Any] | None:
         row = self.connection.execute(
             "SELECT metadata_json, updated_at FROM schema_cache WHERE owner = ? AND table_id = ?",
@@ -959,6 +976,11 @@ def load_glossary(question: str = "", *, limit: int = 12) -> tuple[str, list[dic
     except (OSError, json.JSONDecodeError):
         return "", []
     terms = payload.get("terms", []) if isinstance(payload, dict) else []
+    # Inherited executable terms must include their complete formula in context.
+    from .semantics import load_metric_definitions
+
+    definitions = load_metric_definitions()
+    terms = [{**term, **definitions.get(term.get("key"), {})} if isinstance(term, dict) else term for term in terms]
     concepts = payload.get("concepts", []) if isinstance(payload, dict) else []
     references = {
         str(reference.get("id")): {
