@@ -6,6 +6,9 @@ import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Mapping
+from datetime import datetime
+
+from .workspace_state import positive_env
 
 
 def default_teams_state_path() -> Path:
@@ -68,6 +71,10 @@ class TeamsWorkerStore:
             """
         )
         self.connection.commit()
+        from .memory import SessionStore
+        with SessionStore(self.path.parent) as state:
+            state.migrate_legacy_feedback(self.path)
+        self.prune()
         try:
             self.path.chmod(0o600)
         except OSError:
@@ -153,9 +160,11 @@ class TeamsWorkerStore:
         owner: str,
         record: Mapping[str, Any],
         *,
-        ttl_seconds: int = 24 * 60 * 60,
+        ttl_seconds: int | None = None,
     ) -> None:
         now = time.time()
+        if ttl_seconds is None:
+            ttl_seconds = positive_env("ANALYTICS_AGENT_RESULT_RETENTION_HOURS", 24) * 3600
         self.connection.execute("DELETE FROM teams_results WHERE expires_at <= ?", (now,))
         self.connection.execute(
             """INSERT INTO teams_results(result_id, owner, record_json, expires_at) VALUES (?, ?, ?, ?)
@@ -190,21 +199,40 @@ class TeamsWorkerStore:
         )
 
     def save_feedback(self, owner: str, result_id: str, feedback: str) -> None:
-        self.connection.execute(
-            "INSERT INTO teams_feedback(owner, result_id, feedback, created_at) VALUES (?, ?, ?, ?)",
-            (owner, result_id, feedback[:2000], time.time()),
-        )
-        self.connection.commit()
+        from .memory import SessionStore
+        with SessionStore(self.path.parent, owner=owner) as state:
+            state.add_feedback(feedback, channel="teams", result_id=result_id, category="correction")
 
     def list_feedback(self, *, limit: int = 100) -> list[dict[str, Any]]:
-        rows = self.connection.execute(
-            "SELECT owner, result_id, feedback, created_at FROM teams_feedback ORDER BY created_at DESC LIMIT ?",
-            (max(1, min(int(limit), 1000)),),
-        ).fetchall()
-        return [dict(row) for row in rows]
+        from .memory import SessionStore
+        with SessionStore(self.path.parent) as state:
+            rows = state.list_feedback_records(limit=limit)
+        return [{"owner": row["owner"], "result_id": row["result_id"], "feedback": row["comment"],
+                 "created_at": datetime.fromisoformat(row["created_at"]).timestamp()} for row in rows if row["channel"] == "teams"]
 
     def prune(self, *, now: float | None = None) -> None:
         cutoff = time.time() if now is None else now
         self.connection.execute("DELETE FROM teams_results WHERE expires_at <= ?", (cutoff,))
         self.connection.execute("DELETE FROM teams_requests WHERE updated_at < ?", (cutoff - 7 * 86400,))
+        # Keep the delivery receipt without retaining a second copy of result
+        # rows in cached Adaptive Cards beyond the configured result lifetime.
+        result_cutoff = cutoff - positive_env("ANALYTICS_AGENT_RESULT_RETENTION_HOURS", 24) * 3600
+        for row in self.connection.execute(
+            "SELECT request_id, response_json FROM teams_requests WHERE status = 'complete' AND updated_at <= ?",
+            (result_cutoff,),
+        ).fetchall():
+            cached = json.loads(row["response_json"] or "{}")
+            if cached.get("cache_expired"):
+                continue
+            receipt = {key: cached[key] for key in (
+                "version", "kind", "response_id", "request_id", "tenant_id", "user_id", "conversation_id"
+            ) if key in cached}
+            receipt.update(text="La respuesta guardada venció. Consulta /history para ver tu conversación.",
+                           card=None, result_id="", cache_expired=True)
+            self.connection.execute(
+                "UPDATE teams_requests SET response_json = ? WHERE request_id = ?",
+                (json.dumps(receipt, ensure_ascii=False), row["request_id"]),
+            )
+        self.connection.execute("DELETE FROM teams_feedback WHERE created_at < ?", (cutoff - positive_env("ANALYTICS_AGENT_HISTORY_RETENTION_DAYS", 90) * 86400,))
+        self.connection.execute("DELETE FROM teams_conversations WHERE updated_at < ?", (cutoff - positive_env("ANALYTICS_AGENT_HISTORY_RETENTION_DAYS", 90) * 86400,))
         self.connection.commit()

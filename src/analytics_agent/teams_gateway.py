@@ -161,7 +161,8 @@ def _build_gateway():
         if action_data:
             payload.update({
                 key: action_data[key]
-                for key in ("result_id", "page", "column_page", "table_kind", "trace_page", "sql_offset")
+                for key in ("result_id", "page", "column_page", "table_kind", "trace_page", "sql_offset",
+                            "session_id", "turn_id", "feedback_comment", "feedback_category")
                 if key in action_data
             })
         if action in {"page", "trace", "feedback"}:
@@ -188,6 +189,20 @@ def _build_gateway():
                 if not 0 <= number <= 100000:
                     raise ValueError("La tarjeta contiene una página de trazabilidad no válida")
                 payload[field] = number
+        if action in {"sessions", "history"}:
+            page = payload.get("page", 0)
+            if isinstance(page, bool) or not isinstance(page, int) or not 0 <= page <= 100000:
+                raise ValueError("Página de historial no válida")
+        if action in {"resume", "history", "history_table"} and not re.fullmatch(r"[a-f0-9]{32}", str(payload.get("session_id", ""))):
+            raise ValueError("Identificador de conversación no válido")
+        if action == "history_table" and not re.fullmatch(r"[a-f0-9]{32}", str(payload.get("turn_id", ""))):
+            raise ValueError("Identificador de respuesta no válido")
+        if action == "submit_feedback":
+            comment = payload.get("feedback_comment", "")
+            if not isinstance(comment, str) or not comment.strip() or len(comment) > 2000:
+                raise ValueError("El comentario debe tener entre 1 y 2000 caracteres")
+            if payload.get("feedback_category", "suggestion") not in {"suggestion", "error", "correction", "other"}:
+                raise ValueError("Categoría de feedback no válida")
         return payload
 
     @bot_app.on_message
@@ -199,7 +214,7 @@ def _build_gateway():
                 await ctx.send("El worker de Workbench está desconectado. Inícialo con `analytics-agent teams-worker` y vuelve a enviar la pregunta.")
                 return
             await publish_request(payload)
-            await ctx.send("Recibí tu pregunta. Estoy consultando los datos y te compartiré el resultado aquí.")
+            await ctx.send("Recibí tu solicitud." if text.startswith("/") else "Recibí tu pregunta. Estoy consultando los datos y te compartiré el resultado aquí.")
         except PermissionError:
             await ctx.send("Este agente está habilitado únicamente para el grupo aprobado del piloto.")
         except Exception as exc:
@@ -213,10 +228,16 @@ def _build_gateway():
     @bot_app.on_card_action_execute("trace")
     @bot_app.on_card_action_execute("feedback")
     @bot_app.on_card_action_execute("new")
+    @bot_app.on_card_action_execute("sessions")
+    @bot_app.on_card_action_execute("resume")
+    @bot_app.on_card_action_execute("history")
+    @bot_app.on_card_action_execute("history_table")
+    @bot_app.on_card_action_execute("submit_feedback")
+    @bot_app.on_card_action_execute("cancel_feedback")
     async def on_card_action(ctx: ActivityContext[AdaptiveCardInvokeActivity]) -> AdaptiveCardInvokeResponse:
         data = value_at(ctx.activity, "value", "action", "data", default={})
         action = str(value_at(data, "action") or "")
-        if action not in {"page", "trace", "feedback", "new"}:
+        if action not in {"page", "trace", "feedback", "new", "sessions", "resume", "history", "history_table", "submit_feedback", "cancel_feedback"}:
             await ctx.send("La acción de esta tarjeta no es válida. Envía la pregunta otra vez.")
             return AdaptiveCardActionMessageResponse(
                 status_code=200,

@@ -114,12 +114,31 @@ class ClaimsAgentTests(unittest.TestCase):
         self.bq = ClaimsBigQuery()
         self.addCleanup(self.bq.db.close)
 
+    def test_small_unscoped_metrics_sum_all_history_without_inventing_dates(self):
+        for key, expected in (("pagos_siniestros", 715), ("reservas_avisadas", 250)):
+            with self.subTest(key=key):
+                agent, _ = agent_for([metric(key), action("finish", answer="Resultado consultado.")], self.bq)
+                result = agent.answer(f"Total de {key}")
+                self.assertEqual(expected, result.summary_table.rows[0][key])
+                self.assertNotIn("2026-09-01", self.bq.executed[-1][0])
+                self.assertTrue(any("todo el histórico" in note for note in result.assumptions))
+
+    def test_latest_all_history_scope_overrides_older_dates_for_followup(self):
+        with tempfile.TemporaryDirectory() as directory, SessionStore(directory) as store:
+            session = store.create_session()
+            for question in ("Septiembre de 2026", "Ahora todo el histórico"):
+                turn = store.begin_turn(session, question)
+                store.complete_turn(turn, "Resultado")
+            agent, _ = agent_for([metric("pagos_siniestros"), action("finish", answer="Pagos consultados.")], self.bq)
+            result = agent.answer("¿Y los pagos?", session_store=store, session_id=session)
+            self.assertEqual(715, result.summary_table.rows[0]["pagos_siniestros"])
+
     def test_correct_totals_and_date_boundaries_for_all_four_types(self):
         for key, expected in (("pagos_siniestros", 155), ("reservas_avisadas", 200),
                               ("avisos_recobro", -12), ("avisados_salvamentos", -6)):
             with self.subTest(key=key):
                 agent, _ = agent_for([metric(key), action("finish", answer="Resultado consultado.")], self.bq)
-                result = agent.answer(key)
+                result = agent.answer(f"{key} de septiembre de 2026")
                 self.assertEqual(expected, result.summary_table.rows[0][key])
 
     def test_multimonth_reserves_are_summed_instead_of_last_cut(self):
@@ -165,11 +184,11 @@ class ClaimsAgentTests(unittest.TestCase):
         wrong = metric("pagos_siniestros")
         wrong["filters"] = [{"field": "tipo", "value": "Avisado"}]
         agent, _ = agent_for([wrong, action("finish", answer="No fue posible aplicar ese filtro.")], self.bq)
-        agent.answer("Pagos")
+        agent.answer("Pagos de septiembre de 2026")
         self.assertEqual([], self.bq.executed)
         self.bq.missing_value_field = True
         agent, llm = agent_for([metric("pagos_siniestros"), action("finish", answer="Falta el importe requerido.")], self.bq)
-        agent.answer("Pagos")
+        agent.answer("Pagos de septiembre de 2026")
         self.assertEqual([], self.bq.executed)
         self.assertIn("incurrido_total", llm.calls[-1][1]["last_tool_result"]["error"])
 
@@ -202,13 +221,13 @@ class ClaimsAgentTests(unittest.TestCase):
     def test_stale_schema_is_refreshed_and_classes_cache_expires(self):
         agent, _ = agent_for([metric("honorarios"), action("finish", answer="Honorarios consultados."),
                               metric("honorarios"), action("finish", answer="Honorarios consultados.")], self.bq)
-        agent.answer("Honorarios")
+        agent.answer("Honorarios de septiembre de 2026")
         age, labels = agent._class_cache[TABLE]
         agent._class_cache[TABLE] = (age - 3601, labels)
         from dataclasses import replace
         table = agent.catalog.tables[TABLE]
         agent.catalog.tables[TABLE] = replace(table, columns={k: v for k, v in table.columns.items() if k != "incurrido_total"})
-        result = agent.answer("Honorarios")
+        result = agent.answer("Honorarios de septiembre de 2026")
         self.assertEqual(20, result.summary_table.rows[0]["honorarios"])
         self.assertEqual(2, self.bq.metadata_calls)
         self.assertEqual(2, sum("SELECT DISTINCT" in sql for sql, _ in self.bq.executed))
@@ -226,7 +245,7 @@ class ClaimsAgentTests(unittest.TestCase):
     def test_parameters_and_compiled_metric_rows_are_logged_for_audit(self):
         agent, _ = agent_for([metric("pagos_siniestros"), action("finish", answer="Pagos consultados.")], self.bq)
         with tempfile.TemporaryDirectory() as directory, SessionStore(directory, owner="david") as store:
-            result = agent.answer("Pagos", session_store=store)
+            result = agent.answer("Pagos de septiembre de 2026", session_store=store)
             actions = store.get_session(result.session_id)["turns"][0]["actions"]
             saved = next(item for item in actions if item["action"] == "run_metric")
             self.assertEqual("pagos", saved["result"]["query_parameters"][0]["value"])
@@ -236,7 +255,7 @@ class ClaimsAgentTests(unittest.TestCase):
         run = metric("honorarios")
         run["filters"] = [{"field": "clase_pago", "value": "Indemnización"}]
         agent, llm = agent_for([run, action("finish", answer="Ese filtro contradice honorarios.")], self.bq)
-        result = agent.answer("Honorarios")
+        result = agent.answer("Honorarios de septiembre de 2026")
         self.assertIsNone(result.summary_table)
         self.assertEqual(1, len(self.bq.executed))  # only discovery, no financial query
         self.assertIn("contradice", llm.calls[-1][1]["last_tool_result"]["error"])
@@ -251,8 +270,8 @@ class ClaimsAgentTests(unittest.TestCase):
         ], self.bq)
         with tempfile.TemporaryDirectory() as directory:
             with SessionStore(directory, owner="david") as store:
-                agent.answer("Honorarios", session_store=store, on_clarification=lambda _: "Honorarios ajustador")
-                second = agent.answer("Honorarios", session_store=store)
+                agent.answer("Honorarios de septiembre de 2026", session_store=store, on_clarification=lambda _: "Honorarios ajustador")
+                second = agent.answer("Honorarios de septiembre de 2026", session_store=store)
                 self.assertEqual(20, second.summary_table.rows[0]["honorarios"])
                 self.assertEqual(["Honorarios ajustador"], store.confirmed_payment_classes(TABLE, "honorarios"))
             with SessionStore(directory, owner="otro") as other:

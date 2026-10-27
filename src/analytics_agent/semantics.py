@@ -83,14 +83,16 @@ def compile_metric_query(
     group_by: list[str] | tuple[str, ...] = (),
     filters: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] = (),
     timezone: str = "America/Bogota",
+    allow_unbounded: bool = False,
 ) -> MetricQuery:
     """Compile a confirmed metric and typed, allowlisted query parameters."""
+    unbounded = allow_unbounded and not start_date and not end_date
     try:
-        start = date.fromisoformat(start_date)
-        end = date.fromisoformat(end_date)
+        start = None if unbounded else date.fromisoformat(start_date)
+        end = None if unbounded else date.fromisoformat(end_date)
     except (TypeError, ValueError) as exc:
         raise MetricDefinitionError("Indica inicio y fin del periodo en formato AAAA-MM-DD") from exc
-    if start >= end:
+    if not unbounded and start >= end:
         raise MetricDefinitionError("El inicio del periodo debe ser anterior al final exclusivo")
 
     table_id = str(definition.get("table_id", ""))
@@ -121,7 +123,7 @@ def compile_metric_query(
         raise MetricDefinitionError("La definición contiene un alias inválido")
     projection = [f"`{field}` AS `{alias}`" for field, alias in dimensions]
     projection.append(f"{aggregation}(`{value_field}`) AS `{metric_alias}`")
-    bounds = [f"DATE '{day.isoformat()}'" for day in (start, end)]
+    bounds = [f"DATE '{day.isoformat()}'" for day in (start, end) if day is not None]
     if definition.get("date_field_type", "DATE").upper() == "TIMESTAMP":
         # A closing month is a calendar label, not an instant to move into the previous month.
         calendar_zone = "UTC" if definition.get("time_behavior") == "closing_month_sum" else timezone
@@ -134,7 +136,7 @@ def compile_metric_query(
         bounds = [f"TIMESTAMP({bound}, '{calendar_zone}')" for bound in bounds]
     elif definition.get("date_field_type", "DATE").upper() == "DATETIME":
         bounds = [f"DATETIME({bound})" for bound in bounds]
-    where = [f"`{date_field}` >= {bounds[0]}", f"`{date_field}` < {bounds[1]}"]
+    where = [f"`{date_field}` >= {bounds[0]}", f"`{date_field}` < {bounds[1]}"] if bounds else []
     parameters: list[dict[str, Any]] = []
     filter_fields = definition.get("filter_fields", {})
     if filters and not isinstance(filter_fields, Mapping):
@@ -209,7 +211,7 @@ def compile_metric_query(
 
     sql = (
         "SELECT " + ", ".join(projection)
-        + f" FROM `{table_id}` WHERE " + " AND ".join(where)
+        + f" FROM `{table_id}`" + (" WHERE " + " AND ".join(where) if where else "")
     )
     if dimensions:
         sql += " GROUP BY " + ", ".join(f"`{field}`" for field, _ in dimensions)

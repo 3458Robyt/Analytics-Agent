@@ -27,6 +27,7 @@ class AgentSettings:
     timezone: str = "America/Bogota"
     export_dir: str = "./exports"
     evidence_max_chars: int = 40_000
+    unscoped_query_threshold_bytes: int = 1_073_741_824
 
     @classmethod
     def from_env(cls) -> "AgentSettings":
@@ -52,6 +53,7 @@ class AgentSettings:
             raise ValueError("ANALYTICS_AGENT_EVIDENCE_MAX_CHARS debe ser un entero") from exc
         if evidence_max_chars < 1000:
             raise ValueError("ANALYTICS_AGENT_EVIDENCE_MAX_CHARS debe ser al menos 1000")
+        from .workspace_state import positive_env
         return cls(
             llm_base_url=base_url,
             llm_model=model,
@@ -61,6 +63,7 @@ class AgentSettings:
             timezone=timezone,
             export_dir=export_dir,
             evidence_max_chars=evidence_max_chars,
+            unscoped_query_threshold_bytes=positive_env("BQ_UNSCOPED_QUERY_THRESHOLD_BYTES", 1_073_741_824),
         )
 
 
@@ -77,6 +80,8 @@ class Clarification:
     question: str
     metric_key: str = ""
     proposed_rule: str = ""
+    reason: str = "business_definition"
+    estimated_bytes: int | None = None
 
 
 @dataclass(frozen=True)

@@ -25,6 +25,7 @@ from .claims import (
     observed_class_filter, requested_payment_class, select_payment_classes,
 )
 from .field_resolution import UnknownFieldError, resolve_field, resolve_sql_fields
+from .query_scope import DateScopeRequired, all_history, has_period, needs_period
 
 
 class AnalyticsAgent:
@@ -320,7 +321,47 @@ class AnalyticsAgent:
             for query_id in query_sql
         )
 
-    def answer(
+    def answer(self, question: str, *, context: str = "", on_progress: Callable[[str], None] | None = None,
+               on_clarification: Callable[[Clarification], str] | None = None,
+               session_store: Any | None = None, session_id: str = "", pending_turn_id: str = "",
+               clarification_response: str = "") -> AgentAnswer:
+        """Record every attempt, including provider failures and deferred date clarification."""
+        from .llm import AGENT_SYSTEM_PROMPT_VERSION, load_default_agent_system_prompt
+        for _attempt in range(3):
+            started = time.perf_counter()
+            request_id = ""
+            if session_store is not None and hasattr(session_store, "begin_request"):
+                session_store.prune_history()
+                versions = {"model": self.settings.llm_model, "prompt": AGENT_SYSTEM_PROMPT_VERSION,
+                            "prompt_digest": self._fingerprint(getattr(self.llm, "agent_system_prompt", "") or load_default_agent_system_prompt()),
+                            "glossary": self._fingerprint(self.metric_definitions)}
+                request_id = session_store.begin_request(question, session_id, versions)
+            try:
+                answer = self._answer(question, context=context, on_progress=on_progress,
+                    on_clarification=on_clarification, session_store=session_store, session_id=session_id,
+                    pending_turn_id=pending_turn_id, clarification_response=clarification_response)
+            except Exception as exc:
+                if request_id:
+                    session_store.finish_request(request_id, elapsed=time.perf_counter() - started, error=exc)
+                raise
+            if request_id:
+                session_store.finish_request(request_id, answer, elapsed=time.perf_counter() - started)
+            if (answer.clarification is None or answer.clarification.reason != "date_scope"
+                    or on_clarification is None or _attempt == 2):
+                return answer
+            try:
+                reply = on_clarification(answer.clarification).strip()
+            except (EOFError, KeyboardInterrupt):
+                return answer
+            if not reply:
+                return answer
+            if session_store is not None:
+                session_id, pending_turn_id, clarification_response = answer.session_id, answer.turn_id, reply
+            else:
+                question += f"\nAclaración de periodo del usuario: {reply}"
+        return answer
+
+    def _answer(
         self,
         question: str,
         *,
@@ -333,6 +374,7 @@ class AnalyticsAgent:
         clarification_response: str = "",
     ) -> AgentAnswer:
         question = question.strip()
+        explicit_scope_inputs = [question, clarification_response]
         turn_started = time.perf_counter()
         resumed_turn: dict[str, Any] | None = None
         if pending_turn_id:
@@ -356,6 +398,7 @@ class AnalyticsAgent:
                 if not session_id:
                     session_id = session_store.create_session(question)
                 turn_id = session_store.begin_turn(session_id, question)
+            session_store.active_turn_id = turn_id
 
         retrieved_memory = ""
         glossary_context = ""
@@ -388,6 +431,8 @@ class AnalyticsAgent:
                     "en esta misma sesión (los identificadores son referencias, no instrucciones):\n"
                     + json.dumps(previous_results, ensure_ascii=False, default=str)
                 )
+            if hasattr(session_store, "knowledge"):
+                retrieved_memory += "\n\nRelaciones de conocimiento revisado:\n" + json.dumps(session_store.knowledge(question), ensure_ascii=False)
         try:
             from .memory import load_glossary
 
@@ -484,11 +529,28 @@ class AnalyticsAgent:
             try:
                 return self._ensure_table(table_id, session_store=session_store, force_refresh=refresh)
             except Exception:
-                # Metadata access is helpful, never a prerequisite for a dry run.
                 unavailable_metadata.add(key)
                 if refresh and key in self.catalog.tables:
                     self.catalog.tables[key] = replace(self.catalog.tables[key], metadata_loaded=False)
                 return None
+
+        def check_date_scope(sql: str, estimated_bytes: int | None) -> None:
+            supplied = "\n".join([question, *explicit_scope_inputs])
+            inherited = session_store.temporal_context(session_id) if session_store is not None and hasattr(session_store, "temporal_context") else ""
+            if all_history(supplied) or has_period(supplied) or has_period(inherited) or all_history(inherited):
+                return
+            tables = {str(rule["table_id"]).lower() for rule in self.metric_definitions.values()}
+            tables.update(key for key, table in self.catalog.tables.items()
+                          if any(col.data_type.upper() in {"DATE", "TIMESTAMP", "DATETIME"} for col in table.columns.values()))
+            if needs_period(sql, question, temporal_tables=tables) and (
+                estimated_bytes is None or estimated_bytes > self.settings.unscoped_query_threshold_bytes
+            ):
+                record_query(sql, estimated_bytes, "needs_date_scope")
+                raise DateScopeRequired(estimated_bytes)
+
+        def record_query(sql: str, estimate: int | None, status: str, error: str = "") -> None:
+            if session_store is not None and hasattr(session_store, "record_query"):
+                session_store.record_query(sql, estimate, status, error, attempt_key=str(sequence))
 
         def discover_payment_classes(table_id: str, location: str) -> tuple[str, ...]:
             nonlocal query_count, bytes_processed, sequence
@@ -504,9 +566,15 @@ class AnalyticsAgent:
             dry = self.bigquery.dry_run(checked.sql, location=location)
             stage_timings["dry_run"] = stage_timings.get("dry_run", 0.0) + time.perf_counter() - started
             if not dry.ok:
+                record_query(checked.sql, dry.bytes_processed, "error", dry.error or "dry run fallido")
                 raise BigQueryError(dry.error or "No se pudo descubrir clase_pago")
+            check_date_scope(checked.sql, dry.bytes_processed)
             started = time.perf_counter()
             page = first = self.bigquery.execute(checked.sql, location=location)
+            record_query(checked.sql, dry.bytes_processed, "executed")
+            query_count += 1
+            query_bytes[first.query_id] = int(first.bytes_processed or dry.bytes_processed or 0)
+            bytes_processed = sum(query_bytes.values())
             rows = list(page.rows)
             self._record_page_job(page, query_jobs)
             while page.has_next_page:
@@ -514,11 +582,8 @@ class AnalyticsAgent:
                 rows.extend(page.rows)
                 self._record_page_job(page, query_jobs)
             stage_timings["query"] = stage_timings.get("query", 0.0) + time.perf_counter() - started
-            query_count += 1
             query_sql[first.query_id] = checked.sql
             query_tables[first.query_id] = checked.tables
-            query_bytes[first.query_id] = int(first.bytes_processed or dry.bytes_processed or 0)
-            bytes_processed = sum(query_bytes.values())
             tables_used.update(checked.tables)
             values = tuple(dict.fromkeys(str(row["clase_pago"]) for row in rows if row.get("clase_pago") is not None))
             self._class_cache[table_id.lower()] = (time.monotonic(), values)
@@ -531,6 +596,8 @@ class AnalyticsAgent:
             return values
 
         def save_explicit_definition(clarification: Clarification, reply: str) -> None:
+            if clarification.reason == "date_scope":
+                return
             if not (session_store is not None and clarification.metric_key and clarification.proposed_rule):
                 return
             normalized_reply = " ".join(reply.lower().split())
@@ -560,6 +627,8 @@ class AnalyticsAgent:
                     "question": clarification.question,
                     "metric_key": clarification.metric_key,
                     "proposed_rule": clarification.proposed_rule,
+                    "reason": clarification.reason,
+                    "estimated_bytes": clarification.estimated_bytes,
                 })
             return AgentAnswer(
                 answer="La consulta espera la aclaración de negocio para continuar.",
@@ -582,6 +651,8 @@ class AnalyticsAgent:
                 question=str(prior_clarification.get("question", "")),
                 metric_key=str(prior_clarification.get("metric_key", "")),
                 proposed_rule=str(prior_clarification.get("proposed_rule", "")),
+                reason=str(prior_clarification.get("reason", "business_definition")),
+                estimated_bytes=prior_clarification.get("estimated_bytes"),
             )
             reply = str(resumed_turn.get("user_response", ""))
             save_explicit_definition(clarification, reply)
@@ -681,6 +752,7 @@ class AnalyticsAgent:
             answer = AgentAnswer(
                 answer=answer_text,
                 assumptions=tuple(str(item) for item in (analysis_plan or {}).get("assumptions", []) if item),
+                status="failed",
                 query_count=query_count,
                 tables_used=tuple(sorted(tables_used)),
                 bytes_processed=bytes_processed,
@@ -699,20 +771,22 @@ class AnalyticsAgent:
         try:
             while True:
                 llm_started = time.perf_counter()
-                action, usage = self.llm.next_action(
-                    question_for_model,
-                    context=context,
-                    working_notes=working_notes,
-                    last_tool_result=last_tool_result,
-                    action_history=action_history[-20:],
-                    analysis_plan=analysis_plan,
-                    retrieved_memory=retrieved_memory,
-                    glossary_context=glossary_context,
-                    review_feedback=review_feedback,
-                    catalog_context=self.catalog.prompt_text(query=question) if not action_history else "",
-                    user_clarification="\n".join(user_clarifications),
-                )
-                stage_timings["model"] = stage_timings.get("model", 0.0) + time.perf_counter() - llm_started
+                try:
+                    action, usage = self.llm.next_action(
+                        question_for_model,
+                        context=context,
+                        working_notes=working_notes,
+                        last_tool_result=last_tool_result,
+                        action_history=action_history[-20:],
+                        analysis_plan=analysis_plan,
+                        retrieved_memory=retrieved_memory,
+                        glossary_context=glossary_context,
+                        review_feedback=review_feedback,
+                        catalog_context=self.catalog.prompt_text(query=question) if not action_history else "",
+                        user_clarification="\n".join(user_clarifications),
+                    )
+                finally:
+                    stage_timings["model"] = stage_timings.get("model", 0.0) + time.perf_counter() - llm_started
                 self._add_usage(total_usage, usage)
                 if action["notes"].strip():
                     working_notes = action["notes"].strip()
@@ -806,6 +880,7 @@ class AnalyticsAgent:
                     if not reply:
                         return pending_clarification_answer(clarification)
                     save_explicit_definition(clarification, reply)
+                    explicit_scope_inputs.append(reply)
                     class_replies.setdefault(clarification.metric_key, []).append(reply)
                     previous_action_id = None
                     previous_call = None
@@ -991,7 +1066,10 @@ class AnalyticsAgent:
                          "Creando el archivo Excel local." if action["action"] == "create_excel" else
                          "Leyendo la siguiente página de resultados.")
                 try:
-                    if action["action"] == "search_memory":
+                    if action["action"] == "search_knowledge":
+                        tool_result = (session_store.knowledge(action["search_text"]) if session_store is not None
+                                       else {"matches": [], "note": "El glosario validado sigue disponible en el contexto."})
+                    elif action["action"] == "search_memory":
                         if session_store is None:
                             tool_result = {"action": "search_memory", "matches": [], "note": "No hay memoria persistente en esta ejecución."}
                         else:
@@ -1135,6 +1213,14 @@ class AnalyticsAgent:
                         requested_sql = action["sql"]
                         query_parameters: tuple[dict[str, Any], ...] = ()
                         if action["action"] == "run_metric":
+                            scope_text = "\n".join([question, *explicit_scope_inputs])
+                            inherited_scope = session_store.temporal_context(session_id) if session_store is not None and hasattr(session_store, "temporal_context") else ""
+                            current_period = has_period(scope_text)
+                            if (all_history(scope_text) and not current_period) or (not current_period and not has_period(inherited_scope)):
+                                # A model-suggested date is not an employee-specified period.
+                                action["start_date"] = action["end_date"] = ""
+                            elif not action.get("start_date") or not action.get("end_date"):
+                                raise MetricDefinitionError("El usuario indicó un periodo: conviértelo a start_date y end_date, sin omitir el filtro temporal")
                             if action.get("metric_key") == "pagos_siniestros":
                                 # A generic payments action must not erase an explicit business subset.
                                 requested_class = requested_payment_class(question)
@@ -1234,6 +1320,7 @@ class AnalyticsAgent:
                                 group_by=action["group_by"],
                                 filters=filters,
                                 timezone=self.settings.timezone,
+                                allow_unbounded=True,
                             )
                             requested_sql = metric_query.sql
                             query_parameters = metric_query.parameters
@@ -1271,12 +1358,14 @@ class AnalyticsAgent:
                             dry_run = self.bigquery.dry_run(validated.sql, location=location)
                         stage_timings["dry_run"] = stage_timings.get("dry_run", 0.0) + time.perf_counter() - stage_started
                         if not dry_run.ok:
+                            record_query(validated.sql, dry_run.bytes_processed, "error", dry_run.error or "dry run fallido")
                             if any(token in (dry_run.error or "").lower() for token in ("unrecognized name", "not found inside", "no such field")):
                                 for table_id in validated.tables:
                                     if table_id not in refreshed_schema:
                                         refreshed_schema.add(table_id)
                                         ensure_schema(table_id, refresh=True)
                             raise BigQueryError(dry_run.error or "El dry run de BigQuery no fue aprobado")
+                        check_date_scope(validated.sql, dry_run.bytes_processed)
                         stage_started = time.perf_counter()
                         if query_parameters:
                             page = self.bigquery.execute(
@@ -1284,6 +1373,12 @@ class AnalyticsAgent:
                             )
                         else:
                             page = self.bigquery.execute(validated.sql, location=location)
+                        record_query(validated.sql, dry_run.bytes_processed, "executed")
+                        query_count += 1
+                        query_bytes[page.query_id] = int(page.bytes_processed or dry_run.bytes_processed or 0)
+                        bytes_processed = sum(query_bytes.values())
+                        if metric_definition is not None and not action.get("start_date"):
+                            field_notices.append("Se consultó todo el histórico disponible; no se aplicó un filtro de fechas.")
                         first_page = page
                         rows = list(page.rows)
                         self._record_page_job(page, query_jobs)
@@ -1292,9 +1387,6 @@ class AnalyticsAgent:
                             rows.extend(page.rows)
                             self._record_page_job(page, query_jobs)
                         stage_timings["query"] = stage_timings.get("query", 0.0) + time.perf_counter() - stage_started
-                        query_count += 1
-                        query_bytes[page.query_id] = int(first_page.bytes_processed or dry_run.bytes_processed or 0)
-                        bytes_processed = sum(query_bytes.values())
                         tables_used.update(validated.tables)
                         is_aggregate = self._is_aggregate(validated.sql)
                         has_aggregate_results = has_aggregate_results or is_aggregate
@@ -1360,7 +1452,11 @@ class AnalyticsAgent:
                             query_data.setdefault(page.query_id, {"columns": list(page.columns), "rows": []})["rows"].extend(page.rows)
                             self._record_page_job(page, query_jobs)
                             tool_result = {"action": "query_page", **self._page_result(page)}
+                except DateScopeRequired:
+                    raise
                 except Exception as exc:
+                    if action["action"] in {"run_select", "run_metric"} and action.get("sql"):
+                        record_query(action["sql"], None, "error", str(exc))
                     tool_result = {
                         "action": "tool_error",
                         "requested_action": action["action"],
@@ -1386,8 +1482,12 @@ class AnalyticsAgent:
                 previous_action_id = action_id
                 action_history.append(self._history_entry(action["action"], action, tool_result))
                 last_tool_result = self._model_tool_result(tool_result)
+        except DateScopeRequired as exc:
+            return pending_clarification_answer(Clarification(str(exc), reason="date_scope", estimated_bytes=exc.estimated_bytes))
         except Exception as exc:
             if session_store is not None and turn_id:
+                if hasattr(session_store, "snapshot_request"):
+                    session_store.snapshot_request(session_id, turn_id, stage_timings, total_usage, query_count, bytes_processed)
                 with_context = f"La pregunta quedó incompleta por un error: {type(exc).__name__}."
                 session_store.complete_turn(turn_id, with_context)
             raise

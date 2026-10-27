@@ -29,9 +29,10 @@ from .llm import (
     load_default_agent_system_prompt,
 )
 from .memory import SessionStore
-from .models import AgentAnswer, AgentSettings
+from .models import AgentAnswer, AgentSettings, SummaryTable
 from .schema import DictionaryError, SchemaCatalog, load_dictionary
 from .evaluation import evaluate_prompt, load_evaluation_cases
+from .chat_commands import CommandResult, handle_command
 
 
 DEFAULT_WORKBOOK_URI = (
@@ -182,7 +183,8 @@ def _build_llm(config: RuntimeConfig) -> OpenAICompatibleProvider:
 
 
 def _read_clarification(clarification: Any, console: Console) -> str:
-    console.print(Panel(clarification.question, title="Aclaración de negocio", border_style="yellow"))
+    title = "Periodo de la consulta" if getattr(clarification, "reason", "") == "date_scope" else "Aclaración de negocio"
+    console.print(Panel(clarification.question, title=title, border_style="yellow"))
     return input("Aclaración: ").strip()
 
 
@@ -459,7 +461,7 @@ def _run_chat(
         else:
             session_id = store.create_session()
         console.print(Panel(
-            "Escribe una pregunta. Usa [bold]/new[/bold], [bold]/sessions[/bold], "
+            "Escribe una pregunta. Usa [bold]/new[/bold], [bold]/sessions[/bold], [bold]/resume ID[/bold], [bold]/feedback comentario[/bold], "
             "[bold]/presentation audit|business[/bold] o [bold]/exit[/bold].",
             title=f"Analytics Agent · sesión {session_id}",
             border_style="cyan",
@@ -474,13 +476,6 @@ def _run_chat(
             command = question.lower()
             if command in {"/exit", "/quit", "salir", "exit", "quit"}:
                 return 0
-            if command in {"/clear", "/new"}:
-                session_id = store.create_session()
-                console.print(f"[dim]Nueva sesión: {session_id}[/dim]")
-                continue
-            if command == "/sessions":
-                _render_sessions(store, console)
-                continue
             if command.startswith("/presentation "):
                 requested_presentation = command.split(maxsplit=1)[1].strip()
                 if requested_presentation not in {"audit", "business"}:
@@ -492,12 +487,19 @@ def _run_chat(
             if not question:
                 continue
             try:
+                result = handle_command(store, session_id, question, channel="cli")
+                if result is not None:
+                    session_id = result.session_id
+                    _render_command(result, console)
+                    continue
+                pending = store.pending_turn(session_id)
                 answer = agent.answer(
                     question,
                     session_store=store,
                     session_id=session_id,
                     on_progress=lambda message: progress.print(f"[dim]{message}[/dim]"),
-                    on_clarification=lambda request: _read_clarification(request, console),
+                    pending_turn_id=pending,
+                    clarification_response=question if pending else "",
                 )
                 _render_answer(answer, console, selected_presentation)
                 if answer.learning_updates:
@@ -510,6 +512,62 @@ def _run_chat(
                     worker.start()
             except (BigQueryError, LLMError, ValueError) as exc:
                 console.print(f"[red]No se pudo responder:[/red] {exc}", highlight=False)
+
+
+def _render_command(result: CommandResult, console: Console) -> None:
+    console.print(result.text, markup=False)
+    if result.kind == "sessions":
+        table = Table("ID", "Conversación", "Turnos", "Actualizada", header_style="bold cyan")
+        for row in result.items:
+            table.add_row(row["session_id"], escape(row["title"]), str(row["turns"]), row["updated_at"])
+        console.print(table)
+    elif result.kind == "history":
+        for row in result.items:
+            console.print(Panel(escape(row["question"]), title=row["created_at"]))
+            table = row.get("summary_table")
+            summary = SummaryTable(title=table.get("title", "Resumen"), columns=tuple(table["columns"]), rows=tuple(table["rows"])) if table else None
+            _render_answer(AgentAnswer(row["answer"] or f"Estado: {row['status']}", summary_table=summary), console, "business")
+
+
+def _run_feedback(args: argparse.Namespace, state_dir: str, console: Console) -> int:
+    with SessionStore(state_dir or None) as store:
+        if args.feedback_action == "list":
+            data: Any = store.list_feedback_records(limit=args.limit, status=getattr(args, "status", ""))
+        elif args.feedback_action == "show":
+            data = store.feedback_record(args.feedback_id)
+            if data is None:
+                raise ValueError("No existe ese feedback")
+        else:
+            if not store.resolve_feedback(args.feedback_id, args.note):
+                raise ValueError("No existe ese feedback")
+            data = store.feedback_record(args.feedback_id)
+    if getattr(args, "json", False) or not isinstance(data, list):
+        console.print_json(json.dumps(data, ensure_ascii=False))
+    else:
+        table = Table("ID", "Fecha", "Canal", "Usuario", "Categoría", "Estado", "Comentario", header_style="bold cyan")
+        for row in data:
+            table.add_row(row["feedback_id"], row["created_at"], row["channel"], escape(row["owner"]), row["category"], row["status"], escape(row["comment"]))
+        console.print(table)
+    return 0
+
+
+def _run_usage(args: argparse.Namespace, state_dir: str, console: Console) -> int:
+    with SessionStore(state_dir or None) as store:
+        report = store.usage_report(days=args.days)
+    if args.json:
+        console.print_json(json.dumps(report, ensure_ascii=False))
+        return 0
+    totals = report["totals"]
+    console.print(f"Últimos {report['days']} días · {totals['requests']} solicitudes · {totals['queries']} consultas · {totals['query_retries']} reintentos SQL · {totals['bytes_processed']:,} bytes · {totals['tokens']:,} tokens · media {report['mean_seconds']:.2f} s")
+    console.print("Estados: " + json.dumps(report["statuses"], ensure_ascii=False))
+    console.print("Tiempos por etapa (segundos): " + json.dumps(report["stage_seconds"], ensure_ascii=False))
+    table = Table("Patrón SQL", "Intentos", "Ejecuciones", "Errores", header_style="bold cyan")
+    for row in report["patterns"]:
+        table.add_row(escape(row["pattern"]), str(row["attempts"]), str(row["executions"]), str(row["errors"]))
+    console.print(table)
+    if report["errors"]:
+        console.print_json(json.dumps(report["errors"], ensure_ascii=False))
+    return 0
 
 
 def _render_sessions(store: SessionStore, console: Console) -> None:
@@ -730,6 +788,27 @@ def _build_parser() -> argparse.ArgumentParser:
     feedback_list.add_argument("--limit", type=int, default=100)
     commands.add_parser("teams-worker", help="Procesa solicitudes de Teams desde este runtime de Workbench.")
     commands.add_parser("teams-gateway", help="Inicia el receptor HTTP de Teams para desplegarlo en Cloud Run.")
+    feedback = commands.add_parser("feedback", help="Revisa feedback de ambos canales; comando local del operador.")
+    feedback_actions = feedback.add_subparsers(dest="feedback_action", required=True)
+    for action in ("list", "show", "resolve"):
+        sub = feedback_actions.add_parser(action)
+        sub.add_argument("--json", action="store_true")
+        if action == "list":
+            sub.add_argument("--limit", type=int, default=100)
+            sub.add_argument("--status", choices=("new", "resolved", ""), default="")
+        else:
+            sub.add_argument("feedback_id")
+        if action == "resolve":
+            sub.add_argument("--note", default="")
+    usage = commands.add_parser("usage", help="Diagnóstico local de uso, latencia y errores.")
+    usage_actions = usage.add_subparsers(dest="usage_action", required=True)
+    report = usage_actions.add_parser("report")
+    report.add_argument("--days", type=int, default=30)
+    report.add_argument("--json", action="store_true")
+    knowledge = commands.add_parser("knowledge", help="Consulta relaciones del glosario revisado.")
+    knowledge_actions = knowledge.add_subparsers(dest="knowledge_action", required=True)
+    search = knowledge_actions.add_parser("search")
+    search.add_argument("text", nargs="+")
     return parser
 
 
@@ -751,20 +830,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "doctor":
             config = RuntimeConfig.from_env()
             return _run_doctor(config, console)
-        if args.command == "teams":
-            from .teams_state import TeamsWorkerStore
-
-            with TeamsWorkerStore() as store:
-                rows = store.list_feedback(limit=args.limit)
-            table = Table(title="Correcciones reportadas desde Teams", header_style="bold cyan")
-            table.add_column("Fecha UTC")
-            table.add_column("Usuario Teams", overflow="fold")
-            table.add_column("Resultado", overflow="fold")
-            table.add_column("Observación", overflow="fold")
-            for row in rows:
-                created = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(float(row["created_at"])))
-                table.add_row(created, row["owner"], row["result_id"], row["feedback"])
-            console.print(table)
+        if args.command in {"teams", "feedback"}:
+            return _run_feedback(args, os.environ.get("ANALYTICS_AGENT_STATE_DIR", "").strip(), console)
+        if args.command == "usage":
+            return _run_usage(args, os.environ.get("ANALYTICS_AGENT_STATE_DIR", "").strip(), console)
+        if args.command == "knowledge":
+            with SessionStore(os.environ.get("ANALYTICS_AGENT_STATE_DIR", "").strip() or None) as store:
+                console.print_json(json.dumps(store.knowledge(" ".join(args.text)), ensure_ascii=False))
             return 0
         if args.command == "teams-worker":
             from .teams_worker import run_worker

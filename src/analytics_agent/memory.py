@@ -12,6 +12,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .workspace_state import WorkspaceStateMixin
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -34,7 +36,7 @@ def default_state_dir() -> Path:
     return root / "analytics-agent"
 
 
-class SessionStore:
+class SessionStore(WorkspaceStateMixin):
     """Private SQLite history and searchable evidence for one local user."""
 
     def __init__(self, path: str | Path | None = None, *, owner: str | None = None) -> None:
@@ -51,6 +53,8 @@ class SessionStore:
         self.connection.execute("PRAGMA foreign_keys = ON")
         self.connection.execute("PRAGMA busy_timeout = 30000")
         self._initialize()
+        self.initialize_workspace()
+        self.migrate_legacy_feedback()
         try:
             self.path.chmod(0o600)
         except OSError:
@@ -413,6 +417,7 @@ class SessionStore:
 
     def get_query_result(self, query_id: str, *, session_id: str) -> dict[str, Any] | None:
         """Read a complete result only for its owning local account and session."""
+        self.prune_history()
         row = self.connection.execute(
             """SELECT query_id, turn_id, question, columns_json, column_types_json, rows_blob,
                       sql_text, tables_json, total_rows, created_at
@@ -443,6 +448,7 @@ class SessionStore:
 
     def recent_query_results(self, session_id: str, *, limit: int = 5) -> list[dict[str, Any]]:
         """Return small metadata references, never result rows, for current-session context."""
+        self.prune_history()
         if not self.session_exists(session_id):
             return []
         rows = self.connection.execute(
@@ -508,6 +514,7 @@ class SessionStore:
         )
         self.connection.execute("UPDATE sessions SET updated_at = ? WHERE session_id = ?", (now, session_id))
         self.connection.commit()
+        self.active_turn_id = turn_id
         return turn_id
 
     def log_action(
@@ -793,6 +800,10 @@ class SessionStore:
                 ).fetchone()
                 evidence_count = int(evidence["n"] or 0)
                 verified_count = int(evidence["verified_n"] or 0)
+                archived = self.connection.execute("SELECT evidence_count, verified_count FROM learning_evidence_summaries WHERE learning_id = ?", (learning_id,)).fetchone()
+                if archived:
+                    evidence_count += int(archived[0])
+                    verified_count += int(archived[1])
                 if kind == "preference":
                     if explicit_preference or evidence_count >= 2 and confidence >= 0.75:
                         new_status = "active"
@@ -897,6 +908,8 @@ class SessionStore:
         if row is None:
             return None
         item = dict(row)
+        archived = self.connection.execute("SELECT evidence_count, verified_count, archived_at FROM learning_evidence_summaries WHERE learning_id = ?", (learning_id,)).fetchone()
+        item["archived_evidence"] = dict(archived) if archived else None
         item["evidence"] = [dict(evidence) for evidence in self.connection.execute(
             """SELECT turn_id, verified, created_at FROM learning_evidence
                WHERE learning_id = ? ORDER BY created_at""",

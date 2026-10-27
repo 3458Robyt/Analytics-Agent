@@ -19,6 +19,7 @@ from .teams_common import (
     teams_owner,
 )
 from .teams_state import TeamsWorkerStore
+from .chat_commands import CommandResult, handle_command
 
 LOGGER = logging.getLogger("analytics_agent.teams_worker")
 PAGE_SIZE = 10
@@ -57,6 +58,52 @@ def _text_card(title: str, text: str, *, allow_new: bool = False) -> dict[str, A
             "title": "Nueva consulta",
             "data": {"action": "new"},
         }]
+    return card
+
+
+def _feedback_card(*, session_id: str = "", result_id: str = "") -> dict[str, Any]:
+    return {
+        "type": "AdaptiveCard", "version": "1.5",
+        "body": [
+            {"type": "TextBlock", "text": "Ayúdanos a mejorar", "weight": "Bolder", "size": "Medium"},
+            {"type": "Input.ChoiceSet", "id": "feedback_category", "label": "Tipo de comentario", "value": "suggestion",
+             "choices": [{"title": title, "value": value} for title, value in
+                         (("Sugerencia", "suggestion"), ("Error", "error"), ("Corrección de cifras", "correction"), ("Otro", "other"))]},
+            {"type": "Input.Text", "id": "feedback_comment", "label": "Comentario", "isMultiline": True,
+             "isRequired": True, "errorMessage": "Escribe tu comentario", "maxLength": 2000},
+        ],
+        "actions": [{"type": "Action.Execute", "title": "Enviar comentario",
+                     "data": {"action": "submit_feedback", "session_id": session_id, "result_id": result_id}},
+                    {"type": "Action.Execute", "title": "Cancelar", "associatedInputs": "none", "data": {"action": "cancel_feedback"}}],
+    }
+
+
+def _command_card(result: CommandResult) -> dict[str, Any]:
+    if result.kind == "feedback_form":
+        return _feedback_card(session_id=result.session_id)
+    card = _text_card("Conversaciones" if result.kind == "sessions" else "Analytics Agent", result.text)
+    if result.kind == "sessions":
+        for item in result.items:
+            card["body"].append({"type": "TextBlock", "text": f"{item['title']} · {item['turns']} turnos · {item['updated_at']}", "wrap": True})
+            card["body"].append({"type": "ActionSet", "actions": [
+                {"type": "Action.Execute", "title": "Continuar", "data": {"action": "resume", "session_id": item["session_id"]}},
+                {"type": "Action.Execute", "title": "Leer", "data": {"action": "history", "session_id": item["session_id"], "page": 0}}]})
+    elif result.kind == "history":
+        for item in result.items:
+            card["body"].extend([
+                {"type": "TextBlock", "text": item["question"][:1600], "weight": "Bolder", "wrap": True},
+                {"type": "TextBlock", "text": (item["answer"] or item["status"]), "wrap": True}])
+            if item.get("summary_table"):
+                card["body"].append({"type": "ActionSet", "actions": [{"type": "Action.Execute", "title": "Ver tabla resumen",
+                    "data": {"action": "history_table", "session_id": item["session_id"], "turn_id": item["turn_id"]}}]})
+    import re
+    more = re.search(r"Más: /(sessions|history) (.+)$", result.text)
+    if more:
+        args = more[2].split()
+        data = {"action": more[1], "page": int(args[-1])}
+        if more[1] == "history":
+            data["session_id"] = args[0]
+        card["actions"] = [{"type": "Action.Execute", "title": "Siguiente página", "data": data}]
     return card
 
 
@@ -149,6 +196,7 @@ def _result_card(record: Mapping[str, Any], result_id: str, page: int = 0,
     actions.append({"type": "Action.Execute", "title": "Reportar una corrección",
                     "data": {"action": "feedback", "result_id": result_id}})
     actions.append({"type": "Action.Execute", "title": "Nueva consulta", "data": {"action": "new"}})
+    actions.append({"type": "Action.Execute", "title": "Mis conversaciones", "data": {"action": "sessions", "page": 0}})
     return {
         "type": "AdaptiveCard",
         "version": "1.5",
@@ -272,20 +320,68 @@ class TeamsRequestProcessor:
             if record is None:
                 return _response(request, text="Ese resultado ya venció. Vuelve a enviar la consulta.")
             return _trace_response(request, record)
-        if action == "feedback":
-            self.store.set_feedback_wait(owner, conversation_id, str(request.get("result_id", "")))
-            return _response(request, text="Escribe en el chat la corrección que debería revisar el equipo.")
-        if action == "new":
-            self.store.clear_conversation(owner, conversation_id)
-            return _response(request, text="Conversación reiniciada. ¿Qué necesitas consultar?")
-
         conversation = self.store.conversation(owner, conversation_id)
         text = str(request.get("text", "")).strip()
+        from .memory import SessionStore
+
+        with SessionStore(self.store.path.parent, owner=owner) as sessions:
+            if conversation["session_id"] and not sessions.session_exists(conversation["session_id"]):
+                self.store.clear_conversation(owner, conversation_id)
+                conversation = self.store.conversation(owner, conversation_id)
+            if action == "history_table":
+                session = str(request.get("session_id", ""))
+                history = sessions.get_session(session)
+                turn = next((turn for turn in (history or {}).get("turns", []) if turn["turn_id"] == request.get("turn_id")), None)
+                if turn is None or not turn.get("summary_table"):
+                    return _response(request, text="La tabla no está disponible en tu historial.")
+                key = str(request["request_id"])
+                record = {"answer": turn["answer"], "summary_table": turn["summary_table"], "session_id": session, "turn_id": turn["turn_id"]}
+                sessions.link_result(key, session, turn["turn_id"])
+                self.store.save_result(key, owner, record)
+                return _response(request, text="Tabla resumen guardada en tu historial.", card=_result_card(record, key), result_id=key)
+            if action == "feedback":
+                result_id = str(request.get("result_id", ""))
+                link = sessions.result_link(result_id)
+                if link is None:
+                    old = self.store.get_result(result_id, owner)
+                    if old is None:
+                        return _response(request, text="La respuesta no está disponible en tu historial. Usa /feedback para un comentario general.")
+                    link = old
+                return _response(request, text="Completa el formulario para reportar tu comentario.",
+                    card=_feedback_card(session_id=str(link.get("session_id", "")), result_id=result_id))
+            if action == "submit_feedback":
+                result_id = str(request.get("result_id", ""))
+                link = sessions.result_link(result_id) if result_id else None
+                if result_id and link is None:
+                    old = self.store.get_result(result_id, owner)
+                    if old is None:
+                        return _response(request, text="La respuesta no está disponible para esta cuenta. Usa /feedback para un comentario general.")
+                    link = old
+                session = str((link or {}).get("session_id") or request.get("session_id") or conversation["session_id"])
+                if session and not sessions.session_exists(session):
+                    return _response(request, text="La conversación no pertenece a tu historial o ya venció.")
+                key = sessions.add_feedback(str(request.get("feedback_comment", "")), channel="teams", session_id=session,
+                    turn_id=str((link or {}).get("turn_id") or sessions.latest_turn(session)), result_id=result_id,
+                    category=str(request.get("feedback_category", "suggestion")), external_key=str(request["request_id"]))
+                return _response(request, text=f"Feedback registrado: {key}. Gracias por ayudarnos a mejorar.")
+            if action in {"new", "sessions", "resume", "history", "cancel_feedback"}:
+                text = {"new": "/new", "sessions": f"/sessions {int(request.get('page', 0))}",
+                        "resume": f"/resume {request.get('session_id', '')}",
+                        "history": f"/history {request.get('session_id', '')} {int(request.get('page', 0))}",
+                        "cancel_feedback": "/cancel"}[action]
+            if text.lower() in {"nueva consulta", "iniciar de nuevo"}:
+                text = "/new"
+            try:
+                command = handle_command(sessions, conversation["session_id"], text, channel="teams", request_id=str(request["request_id"]))
+            except ValueError as exc:
+                return _response(request, text=str(exc))
+            if command is not None:
+                if command.changed or command.kind == "cancel":
+                    self.store.save_conversation(owner, conversation_id, session_id=command.session_id,
+                        pending_turn_id=sessions.pending_turn(command.session_id))
+                return _response(request, text=command.text, card=_command_card(command))
         if not text:
             return _response(request, text="Escribe una pregunta para iniciar el análisis.")
-        if text.strip().lower() in {"/nueva", "/new", "nueva consulta", "iniciar de nuevo"}:
-            self.store.clear_conversation(owner, conversation_id)
-            return _response(request, text="Conversación reiniciada. ¿Qué necesitas consultar?")
         if conversation["awaiting_feedback_result_id"]:
             self.store.save_feedback(owner, conversation["awaiting_feedback_result_id"], text)
             self.store.save_conversation(
@@ -297,9 +393,7 @@ class TeamsRequestProcessor:
 
         session_id = conversation["session_id"]
         pending_turn_id = conversation["pending_turn_id"]
-        from .memory import SessionStore
-
-        with bigquery_request_scope(str(request["request_id"])), SessionStore(owner=owner) as session_store:
+        with bigquery_request_scope(str(request["request_id"])), SessionStore(self.store.path.parent, owner=owner) as session_store:
             answer = self.agent.answer(
                 text,
                 session_store=session_store,
@@ -307,6 +401,8 @@ class TeamsRequestProcessor:
                 pending_turn_id=pending_turn_id,
                 clarification_response=text if pending_turn_id else "",
             )
+            if answer.session_id and session_store.session_exists(answer.session_id):
+                session_store.link_result(str(request["request_id"]), answer.session_id, answer.turn_id)
         if answer.learning_updates and self.runtime_config is not None:
             from .cli import _run_learning_jobs
 

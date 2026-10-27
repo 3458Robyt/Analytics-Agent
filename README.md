@@ -75,7 +75,7 @@ analytics-agent doctor
 # Ejecuta una pregunta
 analytics-agent ask "¿Cuál fue la prima emitida por ramo durante el primer semestre de 2026?"
 
-# Inicia una conversación interactiva; /clear abre otra sesión y /exit termina
+# Inicia una conversación; /new abre otra sesión y /exit termina
 analytics-agent chat
 
 # Lista las sesiones guardadas en la cuenta local
@@ -106,6 +106,10 @@ analytics-agent evaluate --candidate-prompt /ruta/al/prompt-candidato.txt
 # Reanuda una conversación en la CLI
 analytics-agent chat --resume ID_SESION
 ```
+
+Dentro del chat puedes usar `/feedback comentario`, `/new`, `/sessions`, `/resume ID` y `/history ID`. El feedback y la navegación se procesan en Python, sin consumir tokens ni consultar BigQuery. El operador puede revisar comentarios con `analytics-agent feedback list`, y tiempos, errores y patrones recurrentes con `analytics-agent usage report`. La guía de estas funciones está en [docs/FEEDBACK_MEMORY.md](docs/FEEDBACK_MEMORY.md).
+
+Si no indicas fechas y no hay un periodo reciente en la conversación, el agente estima la consulta mediante un dry run. Si supera **1 GiB** o no se puede estimar su volumen, pide un periodo antes de ejecutarla. Puedes responder con fechas o con «todo el histórico». Las consultas pequeñas continúan sin esta pregunta; las reglas de pagos y reservas siguen aplicándose.
 
 `doctor` valida ADC mediante el inventario de metadatos de BigQuery. La ejecución de `ask` y `chat` puede generar varias consultas y costos según los datos consultados. El agente conserva la restricción de solo lectura: no genera DML, DDL ni scripts mutantes. El diccionario no necesita contener todas las columnas; BigQuery aporta el esquema disponible.
 
@@ -140,13 +144,15 @@ El glosario vigente se impone sobre procedimientos antiguos de la memoria. Los n
 
 ## Memoria y glosario
 
-La CLI guarda automáticamente sesiones, preguntas, respuestas, SQL, resultados agregados y referencias a trabajos de BigQuery en SQLite. Los resultados completos se guardan localmente comprimidos para que el agente pueda analizarlos o exportarlos después dentro de la misma sesión; no se guardan en un servicio compartido. Por defecto el archivo está en `~/.local/share/analytics-agent/state.sqlite3`; los permisos locales se restringen a la cuenta del runtime. `ANALYTICS_AGENT_STATE_DIR` permite cambiar la carpeta. `/clear` inicia otra sesión y conserva las anteriores; usa `/new` para lo mismo.
+La CLI guarda automáticamente sesiones, preguntas, respuestas, SQL, resultados agregados y referencias a trabajos de BigQuery en SQLite durante **90 días**. Los resultados completos se guardan localmente comprimidos durante **24 horas**, para analizarlos o exportarlos después dentro de la misma sesión. Ambos plazos son configurables. Por defecto el archivo está en `~/.local/share/analytics-agent/state.sqlite3`; los permisos locales se restringen a la cuenta del runtime. `ANALYTICS_AGENT_STATE_DIR` permite cambiar la carpeta. `/clear` inicia otra sesión y conserva las anteriores; usa `/new` para lo mismo.
 
 La memoria pertenece a la cuenta de sistema que ejecuta la CLI. En la POC, ejecuta siempre desde la misma cuenta de Workbench para conservar el historial. Esta separación local no autentica usuarios que compartan una cuenta de sistema.
 
 El prompt principal versionado se encuentra en `src/analytics_agent/prompts/agent_system_v2.txt`. `analytics-agent evaluate` ejecuta la batería local con ese prompt y con el archivo candidato, usando BigQuery simulado; el comando no cambia el prompt vigente. La evaluación sí llama al proveedor de IA para medir el comportamiento real del modelo, por lo que consume tokens.
 
 El glosario compartido, versionado junto al código, está en `src/analytics_agent/data/business_glossary.json`. Las entradas validadas de `terms` pueden compilar SQL; `concepts` aporta contexto de seguros/finanzas o hipótesis candidatas, pero no se ejecuta como fórmula validada. El agente no modifica el glosario. Las definiciones nuevas quedan como propuestas locales hasta que se revisen y agreguen mediante cambios en Git.
+
+Un grafo local derivado de ese glosario relaciona métricas con tablas, importes, fechas y filtros obligatorios, conservando la procedencia y versión. El agente puede consultarlo con `search_knowledge`; para inspeccionarlo desde Workbench usa `analytics-agent knowledge search "pagos y reservas"`. No requiere un servicio externo ni transforma comentarios de usuarios en fórmulas compartidas.
 
 Las aclaraciones ocurren en la misma pregunta de `ask` o `chat`. Si el usuario confirma una regla de negocio, queda guardada como definición personal en la SQLite local; no se incorpora al glosario compartido. `analytics-agent definitions list`, `disable` y `enable` permiten inspeccionarla y administrarla.
 

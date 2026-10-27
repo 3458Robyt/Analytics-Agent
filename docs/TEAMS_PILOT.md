@@ -575,10 +575,10 @@ Prueba en este orden:
 4. Debes recibir primero el acuse de recibo y luego una tarjeta con resumen y tabla.
 5. Si la tabla tiene más de diez filas, pulsa **Siguiente página**; para más de cinco columnas, pulsa **Más columnas**. La navegación usa el resultado almacenado y no vuelve a consultar BigQuery.
 6. Pulsa **Ver SQL y trazabilidad** si necesitas revisar el cálculo. La respuesta normal presenta el resumen; la consulta y su auditoría se muestran bajo demanda.
-7. Pulsa **Reportar una corrección**, escribe el comentario en el mismo chat y confirma que quedó guardado.
-8. Envía una segunda pregunta en el mismo chat y verifica que continúa la sesión. Usa **Nueva consulta** para iniciar otra.
+7. Pulsa **Reportar una corrección**, completa el formulario y confirma que quedó guardado. Comprueba también `/feedback comentario`.
+8. Envía una segunda pregunta y verifica que continúa la sesión. Usa `/new` para iniciar otra, `/sessions` para listar y `/resume ID` para retomarla. `/history ID` muestra el historial con botones para navegar y abrir sus tablas resumen.
 9. Repite con un usuario que no esté autorizado; debe recibir el mensaje de acceso restringido y no se debe llamar al agente.
-10. Revisa `analytics-agent --env-file .env teams feedback list` en Workbench para consultar las observaciones guardadas.
+10. Revisa `analytics-agent --env-file .env feedback list` y `analytics-agent --env-file .env usage report` en Workbench para consultar comentarios y rendimiento. Los nuevos comandos, la retención y el grafo local se explican en [FEEDBACK_MEMORY.md](FEEDBACK_MEMORY.md). Actualiza gateway y worker para habilitar todas las acciones nuevas de las tarjetas; no requieren permisos adicionales de Microsoft Graph.
 
 Como Pub/Sub puede redeliver mensajes, también vuelve a enviar una pregunta después de una interrupción controlada y confirma que no crea dos jobs BigQuery para la misma solicitud. No pruebes con consultas de producción cuyo costo no hayas revisado.
 

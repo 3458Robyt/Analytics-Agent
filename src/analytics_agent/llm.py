@@ -14,7 +14,7 @@ class LLMError(RuntimeError):
     """The configured model endpoint could not return a usable response."""
 
 
-AGENT_SYSTEM_PROMPT_VERSION = "v2"
+AGENT_SYSTEM_PROMPT_VERSION = "v2.1"
 
 
 def load_default_agent_system_prompt() -> str:
@@ -272,7 +272,7 @@ class OpenAICompatibleProvider:
         ), max_tokens=2600, source="El modelo")
         action = result.get("action")
         if action not in {
-            "plan", "clarify", "search_tables", "search_memory", "describe_tables",
+            "plan", "clarify", "search_tables", "search_memory", "search_knowledge", "describe_tables",
             "run_metric", "run_select", "read_page", "inspect_result", "create_excel", "finish",
         }:
             raise LLMError("El modelo devolvió una acción desconocida")
@@ -310,8 +310,8 @@ class OpenAICompatibleProvider:
         if action == "run_metric":
             if not result["metric_key"].strip():
                 raise LLMError("`metric_key` no puede estar vacío")
-            if not result["start_date"].strip() or not result["end_date"].strip():
-                raise LLMError("La métrica requiere el inicio y fin exclusivo del periodo")
+            if bool(result["start_date"].strip()) != bool(result["end_date"].strip()):
+                raise LLMError("Indica inicio y fin exclusivo juntos, o ambos vacíos si no hay periodo")
             if not isinstance(result["group_by"], list) or not all(isinstance(item, str) for item in result["group_by"]):
                 raise LLMError("`group_by` debe ser una lista de campos")
             if not isinstance(result["filters"], list) or not all(isinstance(item, dict) for item in result["filters"]):
