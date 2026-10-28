@@ -37,6 +37,16 @@ class FakeJob:
 
 
 class BigQueryAdapterTests(unittest.TestCase):
+    def test_routine_metadata_preserves_argument_order_and_remote_indicator(self):
+        raw = {"routineType": "SCALAR_FUNCTION", "language": "SQL",
+               "arguments": [{"name": "finvigencia", "dataType": {"typeKind": "DATE"}},
+                             {"name": "iniciovigencia", "dataType": {"typeKind": "DATE"}}],
+               "remoteFunctionOptions": {"endpoint": "https://example.invalid/function"}}
+        client = types.SimpleNamespace(get_routine=lambda routine: types.SimpleNamespace(to_api_repr=lambda: raw))
+        result = BigQueryAdapter(client).inspect_routine_metadata("project.dataset.function")
+        self.assertEqual(["finvigencia", "iniciovigencia"], [arg["name"] for arg in result["arguments"]])
+        self.assertTrue(result["remote"])
+
     def test_page_size_is_technical_and_has_no_total_row_ceiling(self):
         adapter = BigQueryAdapter(None, location="us-east1", page_size=20)
         self.assertEqual(20, adapter.page_size)

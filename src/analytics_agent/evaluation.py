@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from importlib.resources import files
@@ -28,6 +29,12 @@ def _normalized_sql(sql: str) -> str:
     return sql.replace("`", "").lower()
 
 
+def _has_parameters(supplied: Mapping[str, Any], required: Mapping[str, Any]) -> bool:
+    """The multi-metric compiler namespaces each component's parameters."""
+    prefixes = {""} | {match[0] for name in supplied if (match := re.match(r"m\d+_", name))}
+    return any(all(supplied.get(prefix + name) == value for name, value in required.items()) for prefix in prefixes)
+
+
 class FixtureBigQuery:
     """A deterministic BigQuery stand-in that only accepts the SQL required by a case."""
 
@@ -53,7 +60,7 @@ class FixtureBigQuery:
         if forbidden:
             return DryRunResult(False, 0, "El SQL contiene componentes excluidos en la evaluación: " + ", ".join(forbidden))
         supplied = {item["name"]: item["value"] for item in parameters}
-        if any(supplied.get(name) != value for name, value in self.case.get("required_parameters", {}).items()):
+        if not _has_parameters(supplied, self.case.get("required_parameters", {})):
             return DryRunResult(False, 0, "Faltan los parámetros esperados para los filtros de la métrica")
         return DryRunResult(True, 4096)
 
@@ -185,7 +192,7 @@ def evaluate_case(
         if _normalized_sql(str(fragment)) in sql_text:
             failures.append(f"Apareció SQL excluido: {fragment}")
     required_parameters = case.get("required_parameters", {})
-    if required_parameters and not any(all(params.get(k) == v for k, v in required_parameters.items()) for params in bigquery.executed_parameters):
+    if required_parameters and not any(_has_parameters(params, required_parameters) for params in bigquery.executed_parameters):
         failures.append("No se aplicaron los parámetros esperados en la consulta ejecutada.")
     table_id = str(case.get("table_id", "")).lower()
     if table_id not in {table.lower() for table in answer.tables_used}:

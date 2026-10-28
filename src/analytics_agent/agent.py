@@ -5,7 +5,7 @@ import json
 import re
 import time
 from collections import Counter
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Mapping
@@ -27,6 +27,10 @@ from .claims import (
 from .field_resolution import UnknownFieldError, resolve_field, resolve_sql_fields
 from .query_scope import DateScopeRequired, all_history, has_period, needs_period
 from .text_encoding import INPUT_REPAIR_NOTICE, dumps_json, repair_text
+from .analysis_context import requested_metrics, resolve_analysis
+from .analysis_sql import ROUTINE_ID, compile_analysis, routine_roles
+from .organization import OrganizationCatalog
+from .presentation import analysis_presentation
 
 
 class AnalyticsAgent:
@@ -46,6 +50,8 @@ class AnalyticsAgent:
         self.settings = settings
         self.metric_definitions = load_metric_definitions()
         self._class_cache: dict[str, tuple[float, tuple[str, ...]]] = {}
+        self._routine_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self.organization = OrganizationCatalog()
         known_descriptions = {
             "th_primas_final": "Fuente candidata de primas emitidas; validar columnas y periodo mediante SQL.",
             "mm_final": "Fuente candidata de movimientos mensuales de siniestros; validar definición mediante SQL.",
@@ -229,6 +235,8 @@ class AnalyticsAgent:
                           if item in aggregate_query_ids and item not in candidates)
         for candidate in candidates:
             result = query_data[candidate]
+            if result.get("result_role", "answer") != "answer":
+                continue
             evidence_rows = list(result.get("rows", []))
             evidence_columns = tuple(str(column) for column in result.get("columns", []))
             if not evidence_columns or not evidence_rows:
@@ -256,7 +264,7 @@ class AnalyticsAgent:
                         requested_columns = tuple(raw_columns)
                 if isinstance(raw.get("title"), str) and raw["title"].strip():
                     title = raw["title"].strip()
-            columns = requested_columns or evidence_columns
+            columns = tuple(column for column in (requested_columns or evidence_columns) if not column.startswith("__"))
             # BigQuery owns every value. The model can suggest a display title
             # or a subset of columns, but cannot invent or alter result rows.
             rows = tuple({column: row.get(column) for column in columns} for row in evidence_rows)
@@ -295,13 +303,22 @@ class AnalyticsAgent:
                         labels = ", ".join(f"{key}: {row.get(key)}" for key in dimensions)
                         return f"El mayor valor de **{column}** corresponde a **{labels}**, con **{rendered_value}**."
                     return f"El resultado de **{column}** es **{rendered_value}**."
-            return f"La consulta devolvió {len(summary.rows)} fila(s) agregadas. La tabla contiene los valores calculados."
+            if len(summary.rows) == 1:
+                from .presentation import number
+                row = summary.rows[0]
+                facts = [f"**{summary.column_labels.get(column, column.replace('_', ' ').capitalize())}:** "
+                         + number(row.get(column), percent=summary.column_formats.get(column) == "percent")
+                         for column in numeric_columns]
+                if facts:
+                    return "; ".join(facts) + "."
+                return "No se encontraron importes informados para el alcance consultado."
+            return "El cuadro presenta los resultados del análisis para el alcance solicitado."
         if detail and detail.rows:
             return f"La consulta devolvió {len(detail.rows)} fila(s) de detalle; se muestran en la tabla."
         if answer and not any(character.isdigit() for character in answer):
             return answer
         if answer:
-            return "La consulta terminó; los valores verificados se muestran en la tabla y en la auditoría."
+            return "No se obtuvo una tabla de resultados que respalde las cifras de la respuesta."
         return "BigQuery no devolvió filas para el criterio consultado."
 
     @staticmethod
@@ -310,6 +327,7 @@ class AnalyticsAgent:
         query_tables: Mapping[str, tuple[str, ...]],
         query_jobs: Mapping[str, Mapping[str, str]],
         query_bytes: Mapping[str, int],
+        query_parameters: Mapping[str, tuple[dict[str, Any], ...]] | None = None,
     ) -> tuple[dict[str, Any], ...]:
         return tuple(
             {
@@ -318,6 +336,7 @@ class AnalyticsAgent:
                 "tables": list(query_tables.get(query_id, ())),
                 "job": dict(query_jobs.get(query_id, {})),
                 "bytes_processed": query_bytes.get(query_id, 0),
+                "parameters": list((query_parameters or {}).get(query_id, ())),
             }
             for query_id in query_sql
         )
@@ -421,10 +440,16 @@ class AnalyticsAgent:
         retrieved_memory = ""
         glossary_context = ""
         local_now = datetime.now(ZoneInfo(self.settings.timezone))
+        active_analysis = (session_store.get_analysis_state(session_id)
+                           if session_store is not None and hasattr(session_store, "get_analysis_state") else {})
         context = (
             f"{context}\nFecha actual: {local_now.date().isoformat()} "
             f"(zona horaria {self.settings.timezone})."
         ).strip()
+        if active_analysis:
+            context += "\nAnálisis activo de esta conversación (conservar los criterios no modificados):\n" + dumps_json(active_analysis, ensure_ascii=False)
+        context += ("\nClasificación organizacional revisada relevante:\n" + dumps_json(self.organization.search(question), ensure_ascii=False)
+                    + "\nEl glosario compartido actual prevalece sobre reglas antiguas de la memoria; una petición explícita puede elegir fecha de pago para esta consulta.")
         if session_store is not None:
             recent_context = session_store.recent_context(session_id, limit=2)
             search_context = (
@@ -491,6 +516,8 @@ class AnalyticsAgent:
         has_aggregate_results = False
         previous_call: tuple[str, str] | None = None
         previous_action_id: str | None = None
+        seen_inspections: set[str] = set()
+        executed_selects: set[str] = set()
         pending_queries: set[str] = set()
         action_history: list[dict[str, Any]] = list(resumed_action_history)
         query_data: dict[str, dict[str, Any]] = {}
@@ -499,6 +526,7 @@ class AnalyticsAgent:
         query_sql: dict[str, str] = {}
         query_tables: dict[str, tuple[str, ...]] = {}
         query_bytes: dict[str, int] = {}
+        query_parameter_values: dict[str, tuple[dict[str, Any], ...]] = {}
         metric_query_ids: set[str] = set()
         artifacts: list[dict[str, Any]] = []
         field_notices: list[str] = []
@@ -538,6 +566,8 @@ class AnalyticsAgent:
                 rows=data.get("rows", []),
                 sql=query_sql.get(query_id, ""),
                 tables=query_tables.get(query_id, ()),
+                metadata={"result_role": data.get("result_role", "answer"),
+                          "parameters": list(query_parameter_values.get(query_id, ())), **data.get("metadata", {})},
             )
 
         def ensure_schema(table_id: str, *, refresh: bool = False) -> TableSchema | None:
@@ -552,10 +582,17 @@ class AnalyticsAgent:
                     self.catalog.tables[key] = replace(self.catalog.tables[key], metadata_loaded=False)
                 return None
 
-        def check_date_scope(sql: str, estimated_bytes: int | None) -> None:
+        def check_date_scope(sql: str, estimated_bytes: int | None, *, analysis_scope: Mapping[str, Any] | None = None) -> None:
             supplied = "\n".join([question, *explicit_scope_inputs])
             inherited = session_store.temporal_context(session_id) if session_store is not None and hasattr(session_store, "temporal_context") else ""
-            if all_history(supplied) or has_period(supplied) or has_period(inherited) or all_history(inherited):
+            if analysis_scope is not None:
+                if analysis_scope.get("start_date") or any("todo el histórico" in note for note in analysis_scope.get("assumptions", ())):
+                    return
+                # A different question's dates must not authorize an unbounded
+                # analysis whose resolved SQL contains no temporal restriction.
+                supplied = inherited = ""
+            elif (all_history(supplied) or has_period(supplied) or has_period(inherited) or all_history(inherited)
+                    or active_analysis.get("start_date") or any("todo el histórico" in note for note in active_analysis.get("assumptions", ()))):
                 return
             tables = {str(rule["table_id"]).lower() for rule in self.metric_definitions.values()}
             tables.update(key for key, table in self.catalog.tables.items()
@@ -613,6 +650,116 @@ class AnalyticsAgent:
             action_history.append(result)
             return values
 
+        def verified_routine() -> dict[str, Any]:
+            nonlocal query_count, bytes_processed, sequence
+            cached = self._routine_cache.get(ROUTINE_ID)
+            if cached and time.monotonic() - cached[0] < 3600:
+                return cached[1]
+            cache_key = "routine:" + ROUTINE_ID
+            metadata = session_store.get_schema_metadata(cache_key) if session_store is not None else None
+            if metadata is not None:
+                routine_roles(metadata)
+            else:
+                try:
+                    metadata = self.bigquery.inspect_routine_metadata(ROUTINE_ID)
+                except Exception:
+                    checked = validate_sql("SELECT p.parameter_name, p.data_type, p.ordinal_position, "
+                        "r.routine_type, r.routine_body, r.external_language "
+                        "FROM `analytics-487218.functions.INFORMATION_SCHEMA.PARAMETERS` AS p "
+                        "JOIN `analytics-487218.functions.INFORMATION_SCHEMA.ROUTINES` AS r "
+                        "ON p.specific_name = r.specific_name "
+                        "WHERE p.specific_name = 'prima_devengada' AND p.ordinal_position > 0 ORDER BY p.ordinal_position")
+                    started = time.perf_counter()
+                    dry = self.bigquery.dry_run(checked.sql, location=self.settings.bigquery_location or "us-east1")
+                    stage_timings["dry_run"] = stage_timings.get("dry_run", 0.0) + time.perf_counter() - started
+                    if not dry.ok:
+                        raise MetricDefinitionError("No se pudo verificar la firma de la función de devengada: " + str(dry.error))
+                    started = time.perf_counter()
+                    first = page = self.bigquery.execute(checked.sql, location=self.settings.bigquery_location or "us-east1")
+                    record_query(checked.sql, dry.bytes_processed, "executed")
+                    query_count += 1
+                    rows = list(page.rows)
+                    self._record_page_job(page, query_jobs)
+                    while page.has_next_page:
+                        page = self.bigquery.read_page(page.query_id)
+                        rows.extend(page.rows)
+                        self._record_page_job(page, query_jobs)
+                    stage_timings["query"] = stage_timings.get("query", 0.0) + time.perf_counter() - started
+                    query_bytes[first.query_id] = int(first.bytes_processed or dry.bytes_processed or 0)
+                    bytes_processed = sum(query_bytes.values())
+                    query_sql[first.query_id], query_tables[first.query_id] = checked.sql, checked.tables
+                    tables_used.update(checked.tables)
+                    if (not rows or any(row.get("routine_type") != "FUNCTION" or row.get("routine_body") != "SQL"
+                                        or row.get("external_language") for row in rows)):
+                        raise MetricDefinitionError("No se pudo verificar que prima_devengada sea una función SQL interna")
+                    metadata = {"routine_id": ROUTINE_ID, "routine_type": "SCALAR_FUNCTION", "language": "SQL",
+                                "arguments": [{"name": row["parameter_name"], "data_type": row["data_type"]}
+                                              for row in sorted(rows, key=lambda row: int(row["ordinal_position"]))]}
+                    routine_roles(metadata)
+                    sequence += 1
+                    event = {"action": "routine_signature", "result_role": "metadata", "query_id": first.query_id,
+                             "signature": metadata}
+                    if session_store is not None:
+                        session_store.log_action(turn_id, sequence, "routine_signature", {"sql": checked.sql}, event)
+                    action_history.append(event)
+                routine_roles(metadata)
+                if session_store is not None:
+                    session_store.set_schema_metadata(cache_key, metadata)
+            self._routine_cache[ROUTINE_ID] = (time.monotonic(), metadata)
+            return metadata
+
+        def prepare_analysis(action: Mapping[str, Any], failed_components: Mapping[str, str] | None = None):
+            nonlocal active_analysis
+            employee_input = "\n".join(dict.fromkeys([question, *explicit_scope_inputs]))
+            spec = resolve_analysis(action, employee_input,
+                                    today=local_now.date(), active=active_analysis, organization=self.organization)
+            if has_period(employee_input) and not spec.start_date and not all_history(employee_input):
+                raise MetricDefinitionError("Convierte el periodo pedido a start_date y end_date exclusivo; no ejecutes todo el histórico")
+            if any(key not in self.metric_definitions for key in spec.metric_keys):
+                raise MetricDefinitionError("Una de las métricas no tiene una definición revisada")
+            active_analysis = spec.to_dict()
+            if session_store is not None:
+                session_store.set_analysis_state(session_id, active_analysis)
+            components = []
+            for key in spec.metric_keys:
+                rule = self.metric_definitions[key]
+                components.extend((rule["numerator"], rule["denominator"]) if rule.get("kind") == "ratio" else (key,))
+            definitions = {key: dict(value) for key, value in self.metric_definitions.items()}
+            unavailable = dict(failed_components or {})
+            signature = None
+            for key in dict.fromkeys(components):
+                rule = definitions[key]
+                table = ensure_schema(rule["table_id"])
+                if rule.get("kind") == "routine":
+                    try:
+                        signature = verified_routine()
+                    except Exception as error:
+                        unavailable[key] = str(error)
+                if rule.get("payment_class") or (key in {"pagos_siniestros", "honorarios", "indemnizaciones"}
+                                                and any(item.get("field") == "clase_pago" for item in spec.filters)):
+                    try:
+                        values = discover_payment_classes(rule["table_id"], (table.location if table else "") or self.settings.bigquery_location)
+                        goal = rule.get("payment_class", "")
+                        explicit = []
+                        for reply in class_replies.get(goal, []):
+                            explicit = explicit_class_choices(reply, values) or explicit
+                        reader = getattr(session_store, "confirmed_payment_classes", None)
+                        if not explicit and callable(reader):
+                            explicit = reader(rule["table_id"], goal)
+                        if goal:
+                            labels = select_payment_classes(values, goal, explicit=explicit)
+                            rule["required_filters"] = [*rule.get("required_filters", []),
+                                {"field": "clase_pago", "operator": "in", "value": labels}]
+                        if any(item.get("field") == "clase_pago" for item in spec.filters):
+                            spec = replace(spec, filters=tuple(observed_class_filter(values, spec.filters)))
+                    except (MetricDefinitionError, BigQueryError) as error:
+                        unavailable[key] = str(error)
+            active_analysis = spec.to_dict()
+            if session_store is not None:
+                session_store.set_analysis_state(session_id, active_analysis)
+            return compile_analysis(spec, definitions, tables=self.catalog.tables, timezone=self.settings.timezone,
+                                    routine_metadata=signature, unavailable=unavailable)
+
         def save_explicit_definition(clarification: Clarification, reply: str) -> None:
             if clarification.reason == "date_scope":
                 return
@@ -658,7 +805,7 @@ class AnalyticsAgent:
                 session_id=session_id,
                 status="needs_clarification",
                 clarification=clarification,
-                audit=self._audit_records(query_sql, query_tables, query_jobs, query_bytes),
+                audit=self._audit_records(query_sql, query_tables, query_jobs, query_bytes, query_parameter_values),
                 timings={**stage_timings, "total": time.perf_counter() - turn_started},
                 turn_id=turn_id,
             )
@@ -711,7 +858,8 @@ class AnalyticsAgent:
                 data = query_data[query_id]
                 rows = data.get("rows", [])
                 columns = tuple(str(item) for item in data.get("columns", []))
-                if query_id in aggregate_query_ids and query_id not in pending_queries and rows and columns:
+                if (query_id in aggregate_query_ids and query_id not in pending_queries and rows and columns
+                        and data.get("result_role", "answer") == "answer"):
                     verified_summary = self._summary_from_evidence(
                         None, query_data, aggregate_query_ids, query_id
                     )
@@ -744,17 +892,13 @@ class AnalyticsAgent:
                     usage=total_usage,
                     session_id=session_id,
                     query_jobs=tuple(query_jobs.values()),
-                    audit=self._audit_records(query_sql, query_tables, query_jobs, query_bytes),
+                    audit=self._audit_records(query_sql, query_tables, query_jobs, query_bytes, query_parameter_values),
                     timings={**stage_timings, "total": time.perf_counter() - turn_started},
                     turn_id=turn_id,
                     artifacts=tuple(artifacts),
                 )
                 if session_store is not None and turn_id:
-                    stored_summary = {
-                        "title": verified_summary.title,
-                        "columns": verified_summary.columns,
-                        "rows": verified_summary.rows,
-                    }
+                    stored_summary = asdict(verified_summary)
                     session_store.complete_turn(turn_id, answer.answer, answer.assumptions, stored_summary)
                 return answer
 
@@ -777,7 +921,7 @@ class AnalyticsAgent:
                 usage=total_usage,
                 session_id=session_id,
                 query_jobs=tuple(query_jobs.values()),
-                audit=self._audit_records(query_sql, query_tables, query_jobs, query_bytes),
+                audit=self._audit_records(query_sql, query_tables, query_jobs, query_bytes, query_parameter_values),
                 timings={**stage_timings, "total": time.perf_counter() - turn_started},
                 turn_id=turn_id,
                 artifacts=tuple(artifacts),
@@ -1004,6 +1148,9 @@ class AnalyticsAgent:
                         if query_data and not has_rows
                         else self._result_sentence(action["answer"].strip(), summary, detail_table)
                     )
+                    if (query_data and summary is None and detail_table is None and requested_metrics(question)
+                            and all(data.get("result_role", "answer") != "answer" for data in query_data.values())):
+                        answer_text = "No se obtuvo el cálculo solicitado; solo se recopilaron datos de diagnóstico o metadatos."
                     if not accepted:
                         issue_text = "; ".join(dict.fromkeys(issues)) or "la respuesta no quedó verificada"
                         answer_text += f"\n\n**Revisión:** no pude confirmar todos los puntos: {issue_text}"
@@ -1024,7 +1171,7 @@ class AnalyticsAgent:
                         usage=total_usage,
                         session_id=session_id,
                         query_jobs=tuple(query_jobs.values()),
-                        audit=self._audit_records(query_sql, query_tables, query_jobs, query_bytes),
+                        audit=self._audit_records(query_sql, query_tables, query_jobs, query_bytes, query_parameter_values),
                         timings={**stage_timings, "total": time.perf_counter() - turn_started},
                         turn_id=turn_id,
                         artifacts=tuple(artifacts),
@@ -1032,7 +1179,7 @@ class AnalyticsAgent:
                     if session_store is not None:
                         stored_summary = None
                         if summary is not None:
-                            stored_summary = {"title": summary.title, "columns": summary.columns, "rows": summary.rows}
+                            stored_summary = asdict(summary)
                         session_store.complete_turn(turn_id, answer.answer, answer.assumptions, stored_summary)
                         learning_updates: list[str] = []
                         queue_learning = getattr(session_store, "queue_learning_review", None)
@@ -1071,6 +1218,11 @@ class AnalyticsAgent:
                     return answer
 
                 action_id = self._fingerprint({key: value for key, value in action.items() if key not in {"notes"}})
+                if action["action"] == "inspect_result":
+                    inspection_key = self._fingerprint({key: action.get(key) for key in ("query_id", "operation", "column", "offset", "limit")})
+                    if inspection_key in seen_inspections:
+                        return best_effort_answer("la inspección ya se realizó y no aportaría evidencia nueva")
+                    seen_inspections.add(inspection_key)
                 if previous_action_id == action_id:
                     return best_effort_answer(
                         "el agente repitió exactamente la misma acción y no aportó evidencia nueva"
@@ -1078,6 +1230,7 @@ class AnalyticsAgent:
                 progress("Buscando en la memoria de conversaciones y procedimientos." if action["action"] == "search_memory" else
                          "Buscando tablas en el catálogo." if action["action"] == "search_tables" else
                          "Consultando el esquema vivo y las descripciones disponibles." if action["action"] == "describe_tables" else
+                         "Ejecutando el análisis confirmado." if action["action"] == "run_analysis" else
                          "Ejecutando la métrica confirmada." if action["action"] == "run_metric" else
                          "Ejecutando una consulta de lectura." if action["action"] == "run_select" else
                          "Analizando el resultado completo." if action["action"] == "inspect_result" else
@@ -1226,11 +1379,23 @@ class AnalyticsAgent:
                             "metadata_api_used": True,
                             "instruction": "Los nombres y tipos vienen del esquema actual; una descripción ausente no impide continuar con SQL.",
                         }
-                    elif action["action"] in {"run_select", "run_metric"}:
+                    elif action["action"] in {"run_select", "run_metric", "run_analysis"}:
                         metric_definition: Mapping[str, Any] | None = None
-                        requested_sql = action["sql"]
+                        requested_sql = action.get("sql", "")
                         query_parameters: tuple[dict[str, Any], ...] = ()
-                        if action["action"] == "run_metric":
+                        compiled_analysis = None
+                        if action["action"] == "run_metric" and (
+                            self.metric_definitions.get(action.get("metric_key", ""), {}).get("kind", "base") != "base"
+                            or len(requested_metrics(question)) > 1
+                            or self.organization.from_question(question)
+                        ):
+                            action = {**action, "action": "run_analysis"}
+                        if action["action"] == "run_analysis":
+                            compiled_analysis = prepare_analysis(action)
+                            requested_sql = compiled_analysis.query.sql
+                            query_parameters = compiled_analysis.query.parameters
+                            action["sql"] = requested_sql
+                        elif action["action"] == "run_metric":
                             scope_text = "\n".join([question, *explicit_scope_inputs])
                             inherited_scope = session_store.temporal_context(session_id) if session_store is not None and hasattr(session_store, "temporal_context") else ""
                             current_period = has_period(scope_text)
@@ -1250,6 +1415,10 @@ class AnalyticsAgent:
                                     f"No hay una definición confirmada para `{action.get('metric_key', '')}`."
                                 )
                             metric_definition = dict(metric_definition)
+                            legacy_spec = resolve_analysis(action, question, today=local_now.date(), active=active_analysis,
+                                                           organization=self.organization)
+                            if str(action.get("metric_key")) in {"pagos_siniestros", "honorarios", "indemnizaciones"}:
+                                metric_definition["date_field"] = "fecha_pago" if legacy_spec.payment_date_basis == "payment" else "fecha_accidente"
                             table_id = str(metric_definition["table_id"])
                             table = ensure_schema(table_id)
                             required_fields = {metric_definition["value_field"], metric_definition["date_field"]}
@@ -1339,10 +1508,14 @@ class AnalyticsAgent:
                                 filters=filters,
                                 timezone=self.settings.timezone,
                                 allow_unbounded=True,
+                                payment_date_basis=legacy_spec.payment_date_basis,
                             )
                             requested_sql = metric_query.sql
                             query_parameters = metric_query.parameters
                             action["sql"] = requested_sql
+                            active_analysis = replace(legacy_spec, start_date=action["start_date"], end_date=action["end_date"]).to_dict()
+                            if session_store is not None:
+                                session_store.set_analysis_state(session_id, active_analysis)
                         else:
                             # Even technically valid SQL can violate a confirmed financial definition.
                             enforce_compiled_claims(requested_sql, question_for_model, str(action.get("metric_key", "")))
@@ -1367,6 +1540,9 @@ class AnalyticsAgent:
                         if len(locations) > 1:
                             raise BigQueryError("La consulta combina tablas de regiones distintas. Separa las consultas por región.")
                         location = next(iter(locations), self.settings.bigquery_location or self.bigquery.location)
+                        execution_key = self._fingerprint({"sql": validated.sql, "parameters": query_parameters, "location": location})
+                        if execution_key in executed_selects:
+                            return best_effort_answer("la consulta y sus parámetros ya se ejecutaron en este turno")
                         stage_started = time.perf_counter()
                         if query_parameters:
                             dry_run = self.bigquery.dry_run(
@@ -1375,6 +1551,18 @@ class AnalyticsAgent:
                         else:
                             dry_run = self.bigquery.dry_run(validated.sql, location=location)
                         stage_timings["dry_run"] = stage_timings.get("dry_run", 0.0) + time.perf_counter() - stage_started
+                        if (not dry_run.ok and compiled_analysis is not None
+                                and "prima_devengada" in compiled_analysis.components
+                                and "prima_devengada" in str(dry_run.error).lower()):
+                            record_query(validated.sql, dry_run.bytes_processed, "error", dry_run.error or "")
+                            compiled_analysis = prepare_analysis(action, {"prima_devengada": str(dry_run.error)})
+                            query_parameters = compiled_analysis.query.parameters
+                            validated = validate_sql(compiled_analysis.query.sql, self.catalog)
+                            action["sql"] = validated.sql
+                            execution_key = self._fingerprint({"sql": validated.sql, "parameters": query_parameters, "location": location})
+                            stage_started = time.perf_counter()
+                            dry_run = self.bigquery.dry_run(validated.sql, location=location, parameters=query_parameters)
+                            stage_timings["dry_run"] += time.perf_counter() - stage_started
                         if not dry_run.ok:
                             record_query(validated.sql, dry_run.bytes_processed, "error", dry_run.error or "dry run fallido")
                             if any(token in (dry_run.error or "").lower() for token in ("unrecognized name", "not found inside", "no such field")):
@@ -1383,7 +1571,8 @@ class AnalyticsAgent:
                                         refreshed_schema.add(table_id)
                                         ensure_schema(table_id, refresh=True)
                             raise BigQueryError(dry_run.error or "El dry run de BigQuery no fue aprobado")
-                        check_date_scope(validated.sql, dry_run.bytes_processed)
+                        check_date_scope(validated.sql, dry_run.bytes_processed,
+                                         analysis_scope=compiled_analysis.spec.to_dict() if compiled_analysis else None)
                         stage_started = time.perf_counter()
                         if query_parameters:
                             page = self.bigquery.execute(
@@ -1392,6 +1581,7 @@ class AnalyticsAgent:
                         else:
                             page = self.bigquery.execute(validated.sql, location=location)
                         record_query(validated.sql, dry_run.bytes_processed, "executed")
+                        executed_selects.add(execution_key)
                         query_count += 1
                         query_bytes[page.query_id] = int(page.bytes_processed or dry_run.bytes_processed or 0)
                         bytes_processed = sum(query_bytes.values())
@@ -1410,22 +1600,35 @@ class AnalyticsAgent:
                         has_aggregate_results = has_aggregate_results or is_aggregate
                         if is_aggregate:
                             aggregate_query_ids.add(page.query_id)
-                        if metric_definition is not None:
+                        if metric_definition is not None or compiled_analysis is not None:
                             metric_query_ids.add(page.query_id)
                         expected_rows = getattr(first_page, "total_rows", None)
+                        completeness_warning = ""
                         if expected_rows is not None and len(rows) != int(expected_rows):
                             warning = (
                                 f"BigQuery reportó {expected_rows} filas y el agente recibió {len(rows)}. "
                                 "La tabla puede estar incompleta."
                             )
                             analysis_plan.setdefault("assumptions", []).append(warning)
+                            completeness_warning = warning
+                        role = "answer"
+                        if any("information_schema." in table.lower() for table in validated.tables) or re.search(r"\bLIMIT\s+0\b", validated.sql, re.I):
+                            role = "metadata"
+                        elif (compiled_analysis is None and requested_metrics(question)
+                              and not re.search(r"\b(?:cu[aá]nt[oa]s?|cantidad de|n[uú]mero de|conteo)\b", question, re.I)):
+                            tree = parse(validated.sql, read="bigquery")[0]
+                            if tree.find(exp.Count) and not tree.find(exp.Sum):
+                                role = "diagnostic"
                         query_data[page.query_id] = {
                             "columns": list(first_page.columns),
                             "column_types": dict(getattr(first_page, "column_types", {}) or {}),
                             "rows": rows,
+                            "result_role": role,
+                            "metadata": {"analysis": compiled_analysis.spec.to_dict()} if compiled_analysis else {},
                         }
                         query_sql[page.query_id] = validated.sql
                         query_tables[page.query_id] = validated.tables
+                        query_parameter_values[page.query_id] = query_parameters
                         try:
                             persist_query_result(page.query_id)
                         except Exception as storage_error:
@@ -1452,7 +1655,46 @@ class AnalyticsAgent:
                             "field_corrections": list(dict.fromkeys(field_notices)),
                             "query_parameters": list(query_parameters),
                             "metric_key": action.get("metric_key", ""),
+                            "result_role": role,
                         }
+                        if compiled_analysis is not None:
+                            answer_text, summary, notes = analysis_presentation(query_data[page.query_id], compiled_analysis)
+                            status = "partial" if compiled_analysis.unavailable else "complete"
+                            if completeness_warning:
+                                status = "partial"
+                                notes = (*notes, completeness_warning)
+                                answer_text += "\n\n**Resultado parcial.** No se recibieron todas las filas informadas por BigQuery."
+                            if re.search(r"\b(?:excel|xlsx)\b", question, re.I):
+                                try:
+                                    export_rows = [{summary.column_labels.get(key, key): value for key, value in row.items()} for row in summary.rows]
+                                    path = export_results_to_excel([{"query_id": page.query_id,
+                                        "columns": [summary.column_labels.get(key, key) for key in summary.columns],
+                                        "rows": export_rows, "sql": validated.sql, "tables": validated.tables,
+                                        "title": summary.title}], title=question[:120],
+                                        export_dir=self.settings.export_dir, timezone_name=self.settings.timezone)
+                                    artifacts.append({"type": "excel", "path": str(path), "name": path.name,
+                                                      "query_ids": [page.query_id], "row_count": len(summary.rows)})
+                                except Exception as export_error:
+                                    status = "partial"
+                                    notes = (*notes, f"Los datos se calcularon, pero no se pudo crear el Excel ({type(export_error).__name__}).")
+                            sequence += 1
+                            if session_store is not None:
+                                session_store.log_action(turn_id, sequence, "run_analysis", action, tool_result, aggregate=True)
+                                session_store.complete_turn(turn_id, answer_text, notes, asdict(summary), status=status)
+                                try:
+                                    session_store.queue_learning_review(turn_id, question=question,
+                                        prior_context=retrieved_memory, plan={**analysis_plan, "analysis": compiled_analysis.spec.to_dict()},
+                                        answer=answer_text, action_history=[*action_history, tool_result],
+                                        verified=status == "complete", active_learnings=session_store.learning_context(question))
+                                except Exception as learning_error:
+                                    progress(f"No se pudo encolar el aprendizaje ({type(learning_error).__name__}).")
+                            return AgentAnswer(answer_text, assumptions=tuple(dict.fromkeys([*notes, *field_notices])),
+                                summary_table=summary, query_count=query_count, tables_used=tuple(sorted(tables_used)),
+                                bytes_processed=bytes_processed, usage=total_usage, session_id=session_id,
+                                query_jobs=tuple(query_jobs.values()), status=status,
+                                audit=self._audit_records(query_sql, query_tables, query_jobs, query_bytes, query_parameter_values),
+                                timings={**stage_timings, "total": time.perf_counter() - turn_started}, turn_id=turn_id,
+                                artifacts=tuple(artifacts))
                     else:  # read_page
                         requested_query_id = action["query_id"]
                         if requested_query_id in query_data and requested_query_id not in pending_queries:
@@ -1473,7 +1715,7 @@ class AnalyticsAgent:
                 except DateScopeRequired:
                     raise
                 except Exception as exc:
-                    if action["action"] in {"run_select", "run_metric"} and action.get("sql"):
+                    if action["action"] in {"run_select", "run_metric", "run_analysis"} and action.get("sql"):
                         record_query(action["sql"], None, "error", str(exc))
                     tool_result = {
                         "action": "tool_error",
@@ -1490,7 +1732,7 @@ class AnalyticsAgent:
                         action["action"],
                         action,
                         tool_result,
-                        aggregate=action["action"] in {"run_select", "run_metric"} and self._is_aggregate(str(action.get("sql", "")))
+                        aggregate=action["action"] in {"run_select", "run_metric", "run_analysis"} and self._is_aggregate(str(action.get("sql", "")))
                         or action["action"] == "read_page" and action.get("query_id") in aggregate_query_ids,
                     )
                 result_id = self._fingerprint({key: value for key, value in tool_result.items() if key != "rows"})
@@ -1801,7 +2043,8 @@ class AnalyticsAgent:
         query_data: Mapping[str, Mapping[str, Any]], aggregate_query_ids: set[str]
     ) -> SummaryTable | None:
         for query_id, result in reversed(list(query_data.items())):
-            if query_id in aggregate_query_ids or not result.get("columns") or not result.get("rows"):
+            if (query_id in aggregate_query_ids or not result.get("columns") or not result.get("rows")
+                    or result.get("result_role", "answer") != "answer"):
                 continue
             return SummaryTable(
                 title="Filas solicitadas",

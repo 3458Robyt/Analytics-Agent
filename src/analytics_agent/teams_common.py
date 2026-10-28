@@ -141,6 +141,8 @@ def result_page(
     rows = table.get("rows", []) if isinstance(table, Mapping) else []
     all_columns = table.get("columns", []) if isinstance(table, Mapping) else []
     numeric_columns = set(table.get("numeric_columns", [])) if isinstance(table, Mapping) else set()
+    formats = table.get("column_formats", {}) if isinstance(table, Mapping) else {}
+    labels = table.get("column_labels", {}) if isinstance(table, Mapping) else {}
     column_start = column_page * column_page_size
     selected_columns = all_columns[column_start:column_start + column_page_size]
     start = page * page_size
@@ -148,8 +150,9 @@ def result_page(
     return {
         "title": str(table.get("title") or "Resultados"),
         "columns": [str(column) for column in selected_columns],
+        "column_labels": labels,
         "rows": [
-            {str(column): render_cell(row.get(column), numeric=str(column) in numeric_columns) for column in selected_columns}
+            {str(column): _business_cell(row.get(column), numeric=str(column) in numeric_columns, format_kind=formats.get(column, "")) for column in selected_columns}
             for row in rows[start:end]
         ],
         "row_count": len(rows),
@@ -166,3 +169,10 @@ def result_page(
         "column_count": len(all_columns),
         "table_kind": table_kind,
     }
+
+
+def _business_cell(value: Any, *, numeric: bool, format_kind: str) -> str:
+    if format_kind in {"percent", "amount"}:
+        from .presentation import number
+        return number(value, percent=format_kind == "percent")
+    return render_cell(value, numeric=numeric)

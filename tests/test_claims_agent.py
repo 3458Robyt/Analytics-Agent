@@ -24,10 +24,10 @@ class ClaimsBigQuery:
     def __init__(self):
         self.db = sqlite3.connect(":memory:")
         self.db.row_factory = sqlite3.Row
-        self.db.execute("CREATE TABLE claims(tipo TEXT, clase_pago TEXT, incurrido_total REAL, fecha_pago TEXT, mes_mmalla TEXT, ramo_comercial TEXT, pago_moneda_local REAL)")
+        self.db.execute("CREATE TABLE claims(tipo TEXT, clase_pago TEXT, incurrido_total REAL, fecha_pago TEXT, mes_mmalla TEXT, ramo_comercial TEXT, pago_moneda_local REAL, fecha_accidente TEXT)")
         def row(kind, cls, amount, paid=None, month="2026-09-01T00:00:00+00:00"):
-            return (kind, cls, amount, paid, month, "AUTOS", 99999)
-        self.db.executemany("INSERT INTO claims VALUES(?,?,?,?,?,?,?)", [
+            return (kind, cls, amount, paid, month, "AUTOS", 99999, paid)
+        self.db.executemany("INSERT INTO claims VALUES(?,?,?,?,?,?,?,?)", [
             row("Pagos", "Indemnización", 100, "2026-09-01T05:00:00+00:00"),
             row("Pagos", "Indemnización", -10, "2026-09-15T12:00:00+00:00"),
             row(" pAgOs ", "Honorarios", 20, "2026-09-10T12:00:00+00:00"),
@@ -51,7 +51,7 @@ class ClaimsBigQuery:
         if self.no_metadata:
             raise RuntimeError("Metadatos no disponibles")
         kinds = {"tipo": "STRING", "clase_pago": "STRING", "incurrido_total": "FLOAT64",
-                 "fecha_pago": "TIMESTAMP", "mes_mmalla": "TIMESTAMP", "ramo_comercial": "STRING", "pago_moneda_local": "FLOAT64"}
+                 "fecha_pago": "TIMESTAMP", "fecha_accidente": "TIMESTAMP", "mes_mmalla": "TIMESTAMP", "ramo_comercial": "STRING", "pago_moneda_local": "FLOAT64"}
         if self.missing_value_field:
             kinds.pop("incurrido_total")
         return {"table_id": table_id, "actual_schema": {k: {"name": k, "data_type": v} for k, v in kinds.items()},

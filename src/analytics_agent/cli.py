@@ -270,7 +270,10 @@ def _discover(agent: AnalyticsAgent, config: RuntimeConfig, console: Console) ->
     return report
 
 
-def _format_cell(value: Any, *, numeric: bool = False) -> str:
+def _format_cell(value: Any, *, numeric: bool = False, format_kind: str = "") -> str:
+    if format_kind in {"percent", "amount"}:
+        from .presentation import number
+        return number(value, percent=format_kind == "percent")
     if value is None:
         return "—"
     if isinstance(value, bool):
@@ -306,10 +309,11 @@ def _render_answer(answer: AgentAnswer, console: Console, presentation: str = "a
         result_table = Table(title=answer.summary_table.title, show_lines=False, header_style="bold cyan")
         for column in answer.summary_table.columns:
             numeric = column in answer.summary_table.numeric_columns
-            result_table.add_column(column, overflow="fold", justify="right" if numeric else "left")
+            result_table.add_column(answer.summary_table.column_labels.get(column, column), overflow="fold", justify="right" if numeric else "left")
         for row in answer.summary_table.rows:
             result_table.add_row(*(
-                _format_cell(row.get(column), numeric=column in answer.summary_table.numeric_columns)
+                _format_cell(row.get(column), numeric=column in answer.summary_table.numeric_columns,
+                             format_kind=answer.summary_table.column_formats.get(column, ""))
                 for column in answer.summary_table.columns
             ))
         console.print(result_table)
@@ -377,6 +381,9 @@ def _render_answer(answer: AgentAnswer, console: Console, presentation: str = "a
             console.print(Panel("\n".join(details), title=f"Auditoría · consulta {index}", border_style="blue"))
             if audit.get("sql"):
                 console.print(Panel(str(audit["sql"]), title="SQL ejecutado", border_style="yellow"))
+            if audit.get("parameters"):
+                console.print(Panel(json.dumps(audit["parameters"], ensure_ascii=False, default=str, indent=2),
+                                    title="Parámetros SQL", border_style="blue"))
         if answer.timings:
             timing_text = " · ".join(
                 f"{stage}: {seconds:.2f} s" for stage, seconds in answer.timings.items()
@@ -534,7 +541,9 @@ def _render_command(result: CommandResult, console: Console) -> None:
         for row in result.items:
             console.print(Panel(escape(row["question"]), title=row["created_at"]))
             table = row.get("summary_table")
-            summary = SummaryTable(title=table.get("title", "Resumen"), columns=tuple(table["columns"]), rows=tuple(table["rows"])) if table else None
+            summary = SummaryTable(title=table.get("title", "Resumen"), columns=tuple(table["columns"]), rows=tuple(table["rows"]),
+                numeric_columns=tuple(table.get("numeric_columns", ())), column_labels=table.get("column_labels", {}),
+                column_formats=table.get("column_formats", {})) if table else None
             _render_answer(AgentAnswer(row["answer"] or f"Estado: {row['status']}", summary_table=summary), console, "business")
 
 

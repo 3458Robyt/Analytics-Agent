@@ -121,7 +121,7 @@ Las consultas generales de siniestros usan `centralizacion-datos.analytics_curat
 
 | Métrica (`metric_key`) | Valor de `tipo` | Fecha |
 | --- | --- | --- |
-| `pagos_siniestros` | Pagos | `fecha_pago` |
+| `pagos_siniestros` | Pagos | `fecha_accidente` por defecto; `fecha_pago` si se solicita |
 | `reservas_avisadas` | Avisado | `mes_mmalla` |
 | `avisos_recobro` | aviso de recobro | `mes_mmalla` |
 | `avisados_salvamentos` | avisado de salvamentos | `mes_mmalla` |
@@ -141,6 +141,14 @@ analytics-agent ask "Avisos de recobro y avisados de salvamentos de septiembre d
 ```
 
 El glosario vigente se impone sobre procedimientos antiguos de la memoria. Los nombres de campos escritos en la pregunta se comprueban con el esquema de BigQuery o con el dry run: una errata inequívoca se corrige y se comunica; varias equivalencias requieren aclaración. Una descripción faltante no bloquea una columna existente. Para fechas de pago TIMESTAMP se usa `ANALYTICS_AGENT_TIMEZONE` (por defecto `America/Bogota`); `mes_mmalla` conserva el mes de cierre almacenado sin desplazarlo de mes por la zona horaria.
+
+## Análisis combinados y clasificación organizacional
+
+`run_analysis` calcula varias métricas en una consulta y las agrega de forma independiente para evitar duplicar importes. La prima devengada usa `analytics-487218.functions.prima_devengada`, con firma comprobada y vigencias que se solapen con cada mes. La siniestralidad interna predeterminada es **pagos / prima devengada × 100**; no representa automáticamente un indicador sectorial de siniestralidad incurrida.
+
+El catálogo organizacional incluido tiene **82 códigos locales únicos** y 98 relaciones de subprofit. «Por área» significa línea mayor. Copropiedades se identifica con código local **34**, separado del ramo comercial. Los reintentos y cambios de fecha conservan el alcance del análisis activo; `/new` inicia otro. «Últimos seis meses» incluye el mes actual y señala que es parcial.
+
+Los detalles, límites y ejemplos para contrastar cifras en Workbench están en [docs/BUSINESS_KNOWLEDGE.md](docs/BUSINESS_KNOWLEDGE.md). No se necesitan servicios adicionales para usar estas funciones desde la terminal de Workbench.
 
 ## Memoria y glosario
 

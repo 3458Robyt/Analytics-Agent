@@ -129,7 +129,7 @@ def _result_card(record: Mapping[str, Any], result_id: str, page: int = 0,
     rows = page_data["rows"]
     if columns:
         cells = [
-            {"type": "TableCell", "items": [{"type": "TextBlock", "text": str(column), "weight": "Bolder", "wrap": True}]}
+            {"type": "TableCell", "items": [{"type": "TextBlock", "text": page_data.get("column_labels", {}).get(column, str(column)), "weight": "Bolder", "wrap": True}]}
             for column in columns
         ]
         table_rows: list[dict[str, Any]] = [{"type": "TableRow", "cells": cells}]

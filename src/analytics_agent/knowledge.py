@@ -10,6 +10,8 @@ from importlib.resources import files
 from typing import Any
 
 from .semantics import load_metric_definitions
+from .organization import OrganizationCatalog, LEVELS
+from .text_encoding import dumps_json
 
 
 def normalized(text: str) -> str:
@@ -30,6 +32,8 @@ class KnowledgeGraph:
             CREATE TABLE IF NOT EXISTS knowledge_versions (name TEXT PRIMARY KEY, version TEXT NOT NULL);
         """)
         payload = files("analytics_agent").joinpath("data", "business_glossary.json").read_text(encoding="utf-8")
+        self.organization = OrganizationCatalog()
+        payload += "knowledge-v2" + dumps_json(self.organization.payload, ensure_ascii=False)
         self.version = hashlib.sha256(payload.encode()).hexdigest()[:16]
         existing = connection.execute("SELECT version FROM knowledge_versions WHERE name = 'glossary'").fetchone()
         if not existing or existing[0] != self.version:
@@ -47,7 +51,18 @@ class KnowledgeGraph:
                 self._node(concept, "metric", rule.get("term", key), {**rule, "key": key})
                 self._node(table, "table", rule["table_id"], {})
                 self._edge(concept, "uses_table", table, evidence)
-                field_relations = {rule["value_field"]: "aggregates", rule["date_field"]: "uses_date"}
+                if rule.get("routine_id"):
+                    routine = "routine:" + rule["routine_id"]
+                    self._node(routine, "routine", rule["routine_id"], {"signature": "verified_at_runtime", "inclusive_analysis_end": True})
+                    self._edge(concept, "uses_routine", routine, evidence)
+                for role in ("numerator", "denominator"):
+                    if rule.get(role):
+                        self._edge(concept, "uses_" + role, "metric:" + rule[role], evidence)
+                if rule.get("kind") == "ratio":
+                    continue  # Its numerator and denominator own the physical mappings.
+                field_relations = ({"fecha_iniciovig": "uses_argument", "fecha_finvig": "uses_argument", "vrprima": "uses_argument"}
+                                   if rule.get("kind") == "routine" else
+                                   {rule["value_field"]: "aggregates", rule["date_field"]: "uses_date"})
                 for name in rule.get("dimensions", {}):
                     field_relations.setdefault(name, "groups_by")
                 for field, relation in field_relations.items():
@@ -59,13 +74,27 @@ class KnowledgeGraph:
                     node = f"filter:{key}:{item['field']}"
                     self._node(node, "filter", f"{item['field']}={item.get('value')}", dict(item))
                     self._edge(concept, "requires_filter", node, evidence)
+            evidence = {"version": self.version, "source": self.organization.payload["source"],
+                        "validated_by": self.organization.payload["reviewed_by"], "temporal_scope": "current_catalog"}
+            for row in self.organization.rows:
+                local = f"local_code:{row['cod_subprofit_loc']}"
+                self._node(local, "local_code", str(row["cod_subprofit_loc"]), dict(row))
+                for level in LEVELS:
+                    node = f"organization:{level}:{row[level]}"
+                    self._node(node, "organization", row[level], {"level": level})
+                    self._edge(local, "belongs_to_" + level, node, evidence)
+                    self._edge(node, "contains_local_code", local, evidence)
+            for link in self.organization.payload["subprofit_links"]:
+                node = f"subprofit:{link['cod_subprofit']}"
+                self._node(node, "subprofit", str(link["cod_subprofit"]), {"unique": False})
+                self._edge(node, "maps_to", f"local_code:{link['cod_subprofit_loc']}", evidence)
             self.connection.execute("INSERT OR REPLACE INTO knowledge_versions VALUES ('glossary', ?)", (self.version,))
 
     def _node(self, key: str, kind: str, label: str, payload: dict[str, Any]) -> None:
-        self.connection.execute("INSERT OR REPLACE INTO knowledge_nodes VALUES (?, ?, ?, ?)", (key, kind, label, json.dumps(payload, ensure_ascii=False)))
+        self.connection.execute("INSERT OR REPLACE INTO knowledge_nodes VALUES (?, ?, ?, ?)", (key, kind, label, dumps_json(payload, ensure_ascii=False)))
 
     def _edge(self, source: str, relation: str, target: str, evidence: dict[str, Any]) -> None:
-        self.connection.execute("INSERT OR REPLACE INTO knowledge_edges VALUES (?, ?, ?, ?)", (source, relation, target, json.dumps(evidence, ensure_ascii=False)))
+        self.connection.execute("INSERT OR REPLACE INTO knowledge_edges VALUES (?, ?, ?, ?)", (source, relation, target, dumps_json(evidence, ensure_ascii=False)))
 
     def search(self, query: str, *, limit: int = 4) -> dict[str, Any]:
         tokens = {token for token in re.findall(r"\w+", normalized(query)) if len(token) > 2}
@@ -88,5 +117,5 @@ class KnowledgeGraph:
                 edges.append({"relation": edge["relation"], "kind": edge["kind"], "label": edge["label"],
                               "details": json.loads(edge["payload_json"]), "evidence": json.loads(edge["evidence_json"])})
             matches.append({"concept": row["label"], "metric_key": row["node_id"].split(":", 1)[1], "relationships": edges})
-        return {"version": self.version, "matches": matches,
+        return {"version": self.version, "matches": matches, "organization": self.organization.search(query),
                 "note": "Índice derivado del glosario revisado; las propuestas personales no son fórmulas compartidas."}

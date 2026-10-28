@@ -73,6 +73,8 @@ class SummaryTable:
     columns: tuple[str, ...]
     rows: tuple[dict[str, Any], ...]
     numeric_columns: tuple[str, ...] = ()
+    column_labels: dict[str, str] = field(default_factory=dict)
+    column_formats: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

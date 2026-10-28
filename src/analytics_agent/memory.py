@@ -172,6 +172,13 @@ class SessionStore(WorkspaceStateMixin):
             CREATE INDEX IF NOT EXISTS learning_evidence_turn_idx ON learning_evidence(turn_id);
             CREATE INDEX IF NOT EXISTS learning_queue_owner_status_idx ON learning_queue(owner, status, created_at);
             CREATE INDEX IF NOT EXISTS query_results_session_idx ON query_results(owner, session_id, created_at);
+            CREATE TABLE IF NOT EXISTS analysis_state (
+                session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
+                owner TEXT NOT NULL,
+                spec_json TEXT NOT NULL,
+                glossary_version INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         turn_columns = {
@@ -184,6 +191,9 @@ class SessionStore(WorkspaceStateMixin):
             self.connection.execute(
                 "ALTER TABLE turns ADD COLUMN pending_clarification_json TEXT NOT NULL DEFAULT 'null'"
             )
+        result_columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(query_results)")}
+        if "metadata_json" not in result_columns:
+            self.connection.execute("ALTER TABLE query_results ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'")
         try:
             self.connection.execute(
                 """CREATE VIRTUAL TABLE IF NOT EXISTS turns_fts USING fts5(
@@ -374,6 +384,7 @@ class SessionStore(WorkspaceStateMixin):
         rows: Sequence[Mapping[str, Any]],
         sql: str = "",
         tables: Sequence[str] = (),
+        metadata: Mapping[str, Any] | None = None,
     ) -> None:
         """Persist complete local result rows for later inspection/export in this session."""
         if not self.session_exists(session_id):
@@ -389,12 +400,12 @@ class SessionStore(WorkspaceStateMixin):
         now = _utc_now()
         self.connection.execute(
             """INSERT INTO query_results(query_id, owner, session_id, turn_id, question, columns_json,
-               column_types_json, rows_blob, sql_text, tables_json, total_rows, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               column_types_json, rows_blob, sql_text, tables_json, total_rows, created_at, metadata_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(query_id) DO UPDATE SET question = excluded.question,
                columns_json = excluded.columns_json, column_types_json = excluded.column_types_json,
                rows_blob = excluded.rows_blob, sql_text = excluded.sql_text, tables_json = excluded.tables_json,
-               total_rows = excluded.total_rows, created_at = excluded.created_at
+               total_rows = excluded.total_rows, created_at = excluded.created_at, metadata_json = excluded.metadata_json
                WHERE query_results.owner = excluded.owner AND query_results.session_id = excluded.session_id""",
             (
                 query_id,
@@ -409,6 +420,7 @@ class SessionStore(WorkspaceStateMixin):
                 dumps_json(list(tables), ensure_ascii=False),
                 len(rows),
                 now,
+                dumps_json(dict(metadata or {}), ensure_ascii=False, default=str),
             ),
         )
         if self.connection.execute("SELECT changes()").fetchone()[0] != 1:
@@ -421,7 +433,7 @@ class SessionStore(WorkspaceStateMixin):
         self.prune_history()
         row = self.connection.execute(
             """SELECT query_id, turn_id, question, columns_json, column_types_json, rows_blob,
-                      sql_text, tables_json, total_rows, created_at
+                      sql_text, tables_json, total_rows, created_at, metadata_json
                FROM query_results WHERE query_id = ? AND owner = ? AND session_id = ?""",
             (query_id, self.owner, session_id),
         ).fetchone()
@@ -445,6 +457,7 @@ class SessionStore(WorkspaceStateMixin):
             "tables": tables,
             "total_rows": int(row["total_rows"]),
             "created_at": str(row["created_at"]),
+            "metadata": json.loads(row["metadata_json"]),
         }
 
     def recent_query_results(self, session_id: str, *, limit: int = 5) -> list[dict[str, Any]]:
@@ -453,7 +466,7 @@ class SessionStore(WorkspaceStateMixin):
         if not self.session_exists(session_id):
             return []
         rows = self.connection.execute(
-            """SELECT query_id, turn_id, question, columns_json, tables_json, total_rows, created_at
+            """SELECT query_id, turn_id, question, columns_json, tables_json, total_rows, created_at, metadata_json
                FROM query_results WHERE owner = ? AND session_id = ? ORDER BY created_at DESC LIMIT ?""",
             (self.owner, session_id, max(1, min(limit, 20))),
         ).fetchall()
@@ -466,9 +479,27 @@ class SessionStore(WorkspaceStateMixin):
                 "tables": json.loads(row["tables_json"]),
                 "total_rows": int(row["total_rows"]),
                 "created_at": str(row["created_at"]),
+                "metadata": json.loads(row["metadata_json"]),
             }
             for row in rows
         ]
+
+    def get_analysis_state(self, session_id: str) -> dict[str, Any]:
+        if not self.session_exists(session_id):
+            return {}
+        row = self.connection.execute("SELECT spec_json FROM analysis_state WHERE owner = ? AND session_id = ?",
+                                      (self.owner, session_id)).fetchone()
+        return json.loads(row[0]) if row else {}
+
+    def set_analysis_state(self, session_id: str, spec: Mapping[str, Any], *, glossary_version: int = 5) -> None:
+        if not self.session_exists(session_id):
+            raise ValueError("La sesión no pertenece a esta cuenta")
+        self.connection.execute("""INSERT INTO analysis_state VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET spec_json=excluded.spec_json,
+            glossary_version=excluded.glossary_version, updated_at=excluded.updated_at
+            WHERE analysis_state.owner=excluded.owner""",
+            (session_id, self.owner, dumps_json(dict(spec), ensure_ascii=False), glossary_version, _utc_now()))
+        self.connection.commit()
 
     def invalidate_schema_metadata(self, table_id: str) -> None:
         self.connection.execute(
@@ -605,14 +636,19 @@ class SessionStore(WorkspaceStateMixin):
         answer: str,
         assumptions: Sequence[str] = (),
         summary_table: Mapping[str, Any] | None = None,
+        *,
+        status: str = "complete",
     ) -> None:
+        if status not in {"complete", "partial"}:
+            raise ValueError("El turno debe quedar completo o parcial")
         self.connection.execute(
-            "UPDATE turns SET answer = ?, assumptions_json = ?, summary_table_json = ?, status = 'complete', "
+            "UPDATE turns SET answer = ?, assumptions_json = ?, summary_table_json = ?, status = ?, "
             "pending_clarification_json = 'null' WHERE turn_id = ?",
             (
                 answer,
                 dumps_json(list(assumptions), ensure_ascii=False),
                 dumps_json(summary_table, ensure_ascii=False, default=str),
+                status,
                 turn_id,
             ),
         )

@@ -1,0 +1,978 @@
+{
+  "version": 1,
+  "source": "20261028_114249_Relaci_n_de_vicepresidencias_l_neas_y_c_digos_su_be34c5d6.xlsx",
+  "reviewed_by": "David Centeno",
+  "reviewed_on": "2026-10-28",
+  "temporal_scope": "current_catalog_no_historical_validity",
+  "source_rows": 98,
+  "local_codes": [
+    {
+      "cod_subprofit_loc": 1,
+      "vicepresidencia": "Autos",
+      "linea_mayor": "Auto Tradicional",
+      "linea_menor": "Auto Individuales",
+      "nombre_lob_mor": "AUTO INDIVIDUALES"
+    },
+    {
+      "cod_subprofit_loc": 2,
+      "vicepresidencia": "Autos",
+      "linea_mayor": "Auto Tradicional",
+      "linea_menor": "Auto Colectivas",
+      "nombre_lob_mor": "AUTO COLECTIVAS"
+    },
+    {
+      "cod_subprofit_loc": 3,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Hogar",
+      "linea_menor": "Hogar",
+      "nombre_lob_mor": "HOGAR"
+    },
+    {
+      "cod_subprofit_loc": 4,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Responsabilidad Civil",
+      "linea_menor": "RCE",
+      "nombre_lob_mor": "GENERAL LIABILITY"
+    },
+    {
+      "cod_subprofit_loc": 5,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Líneas Financieras",
+      "linea_menor": "Cumplimiento",
+      "nombre_lob_mor": "CUMPLIMIENTO"
+    },
+    {
+      "cod_subprofit_loc": 6,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Global Property",
+      "linea_menor": "Energy",
+      "nombre_lob_mor": "BOILER AND MACHINERY"
+    },
+    {
+      "cod_subprofit_loc": 7,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Global Property",
+      "linea_menor": "C.A.R.",
+      "nombre_lob_mor": "CONSTRUCCIÓN"
+    },
+    {
+      "cod_subprofit_loc": 8,
+      "vicepresidencia": "Fronting",
+      "linea_mayor": "Fronting Personas",
+      "linea_menor": "Fronting Personas",
+      "nombre_lob_mor": "CRÉDITO"
+    },
+    {
+      "cod_subprofit_loc": 9,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Global Property",
+      "linea_menor": "Property",
+      "nombre_lob_mor": "PROPERTY"
+    },
+    {
+      "cod_subprofit_loc": 10,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Transportes",
+      "linea_menor": "RC Transportes",
+      "nombre_lob_mor": "MARINE LIABILITY"
+    },
+    {
+      "cod_subprofit_loc": 11,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Líneas Financieras",
+      "linea_menor": "IRF y BBB",
+      "nombre_lob_mor": "FIDELITY COMM"
+    },
+    {
+      "cod_subprofit_loc": 12,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Global Property",
+      "linea_menor": "Property",
+      "nombre_lob_mor": "EDP"
+    },
+    {
+      "cod_subprofit_loc": 13,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Accidentes Personales",
+      "linea_menor": "AP Grupo",
+      "nombre_lob_mor": "A & H INDIVIDUAL"
+    },
+    {
+      "cod_subprofit_loc": 14,
+      "vicepresidencia": "Conmutación",
+      "linea_mayor": "Conmutación",
+      "linea_menor": "Conmutación",
+      "nombre_lob_mor": "Conmutacion"
+    },
+    {
+      "cod_subprofit_loc": 15,
+      "vicepresidencia": "Autos",
+      "linea_mayor": "Auto Tradicional",
+      "linea_menor": "Bicicletas",
+      "nombre_lob_mor": "TODO RIESGO BICICLETAS - DM"
+    },
+    {
+      "cod_subprofit_loc": 16,
+      "vicepresidencia": "Autos",
+      "linea_mayor": "Auto Tradicional",
+      "linea_menor": "Bicicletas",
+      "nombre_lob_mor": "TODO RIESGO BICICLETAS - HOGAR"
+    },
+    {
+      "cod_subprofit_loc": 17,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Global Property",
+      "linea_menor": "Energy",
+      "nombre_lob_mor": "UTILITIES CONSTRUCCIONS"
+    },
+    {
+      "cod_subprofit_loc": 18,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Global Property",
+      "linea_menor": "Energy",
+      "nombre_lob_mor": "OIL PETROCHEMICAL"
+    },
+    {
+      "cod_subprofit_loc": 19,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Desempleo",
+      "linea_menor": "Desempleo DM",
+      "nombre_lob_mor": "Desempleo"
+    },
+    {
+      "cod_subprofit_loc": 20,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Desempleo",
+      "linea_menor": "Desempleo",
+      "nombre_lob_mor": "Desempleo"
+    },
+    {
+      "cod_subprofit_loc": 21,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Responsabilidad Civil",
+      "linea_menor": "RCE",
+      "nombre_lob_mor": "EXCESS CASUALTY"
+    },
+    {
+      "cod_subprofit_loc": 22,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Líneas Financieras",
+      "linea_menor": "PI",
+      "nombre_lob_mor": "PROFESSIONAL"
+    },
+    {
+      "cod_subprofit_loc": 23,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Líneas Financieras",
+      "linea_menor": "D&O",
+      "nombre_lob_mor": "MGMT LIAB FIN"
+    },
+    {
+      "cod_subprofit_loc": 24,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Accidentes Personales",
+      "linea_menor": "AP Grupo",
+      "nombre_lob_mor": "A & H GRUPO"
+    },
+    {
+      "cod_subprofit_loc": 25,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Accidentes Personales",
+      "linea_menor": "Accidentes Personales DM",
+      "nombre_lob_mor": "DM ACCIDENTES PERSONALES"
+    },
+    {
+      "cod_subprofit_loc": 26,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Accidentes Personales",
+      "linea_menor": "Individual Travel",
+      "nombre_lob_mor": "A & H INDIVIDUAL TRAVEL"
+    },
+    {
+      "cod_subprofit_loc": 28,
+      "vicepresidencia": "Autos",
+      "linea_mayor": "Responsabilidad Civil Auto",
+      "linea_menor": "RCE Auto",
+      "nombre_lob_mor": "RC EXTRACONTRACTUAL AUTO"
+    },
+    {
+      "cod_subprofit_loc": 29,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Líneas Financieras",
+      "linea_menor": "D&O",
+      "nombre_lob_mor": "MGMT LIAB COMM"
+    },
+    {
+      "cod_subprofit_loc": 30,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Accidentes Personales",
+      "linea_menor": "AP Grupo",
+      "nombre_lob_mor": "A & H VOLUNTARY EMPLOYEE BENEFITS"
+    },
+    {
+      "cod_subprofit_loc": 31,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Accidentes Personales",
+      "linea_menor": "Group Travel",
+      "nombre_lob_mor": "A & H GROUP TRAVEL"
+    },
+    {
+      "cod_subprofit_loc": 32,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Garantía Extendida y P. Plus",
+      "linea_menor": "Garantía Extendida",
+      "nombre_lob_mor": "GARANTIA EXTENDIDA"
+    },
+    {
+      "cod_subprofit_loc": 33,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Global Property",
+      "linea_menor": "Energy",
+      "nombre_lob_mor": "CHEMICAL"
+    },
+    {
+      "cod_subprofit_loc": 34,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Copropiedades",
+      "linea_menor": "Copropiedades",
+      "nombre_lob_mor": "PYMES"
+    },
+    {
+      "cod_subprofit_loc": 35,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Garantía Extendida y P. Plus",
+      "linea_menor": "Productos Plus",
+      "nombre_lob_mor": "LOYALTY"
+    },
+    {
+      "cod_subprofit_loc": 36,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Transportes",
+      "linea_menor": "Cargo Transportes",
+      "nombre_lob_mor": "AVIACIÓN"
+    },
+    {
+      "cod_subprofit_loc": 37,
+      "vicepresidencia": "N.A.",
+      "linea_mayor": "N.A.",
+      "linea_menor": "N.A.",
+      "nombre_lob_mor": "N.A."
+    },
+    {
+      "cod_subprofit_loc": 38,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Responsabilidad Civil",
+      "linea_menor": "Product Recall",
+      "nombre_lob_mor": "CRISIS MANAGMENT - SBS"
+    },
+    {
+      "cod_subprofit_loc": 39,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Líneas Financieras",
+      "linea_menor": "PI",
+      "nombre_lob_mor": "FIPI"
+    },
+    {
+      "cod_subprofit_loc": 40,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Líneas Financieras",
+      "linea_menor": "IRF y BBB",
+      "nombre_lob_mor": "FIDELITY FIN"
+    },
+    {
+      "cod_subprofit_loc": 41,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Global Property",
+      "linea_menor": "Energy",
+      "nombre_lob_mor": "PROCESS INDUSTIRES"
+    },
+    {
+      "cod_subprofit_loc": 42,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Transportes",
+      "linea_menor": "Cargo Transportes",
+      "nombre_lob_mor": "MARINE CARGO"
+    },
+    {
+      "cod_subprofit_loc": 43,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Garantía Extendida y P. Plus",
+      "linea_menor": "Productos Plus DM",
+      "nombre_lob_mor": "PLUS PRODUCT"
+    },
+    {
+      "cod_subprofit_loc": 45,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Transportes",
+      "linea_menor": "Casco Transportes",
+      "nombre_lob_mor": "MARINE HULL"
+    },
+    {
+      "cod_subprofit_loc": 46,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Responsabilidad Civil",
+      "linea_menor": "Product Recall",
+      "nombre_lob_mor": "ACCIDENTAL CONTAMINATION"
+    },
+    {
+      "cod_subprofit_loc": 48,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Responsabilidad Civil",
+      "linea_menor": "Product Recall",
+      "nombre_lob_mor": "MALACIOUS PRODUCT TAMPERING"
+    },
+    {
+      "cod_subprofit_loc": 49,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Responsabilidad Civil",
+      "linea_menor": "Ambiental",
+      "nombre_lob_mor": "POLLUTION - EIL RISK MGTM EIL"
+    },
+    {
+      "cod_subprofit_loc": 51,
+      "vicepresidencia": "Autos",
+      "linea_mayor": "Auto Tradicional",
+      "linea_menor": "Auto DM",
+      "nombre_lob_mor": "DM AUTO"
+    },
+    {
+      "cod_subprofit_loc": 53,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Garantía Extendida y P. Plus",
+      "linea_menor": "Productos Plus DM",
+      "nombre_lob_mor": "DM PLUS IDENT&CARD PROT"
+    },
+    {
+      "cod_subprofit_loc": 54,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Garantía Extendida y P. Plus",
+      "linea_menor": "Productos Plus",
+      "nombre_lob_mor": "DM PLUS LIFESTYLE PROTECTION"
+    },
+    {
+      "cod_subprofit_loc": 55,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Garantía Extendida y P. Plus",
+      "linea_menor": "Productos Plus",
+      "nombre_lob_mor": "N DM PLUS IDENT&CARD PROT"
+    },
+    {
+      "cod_subprofit_loc": 56,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Garantía Extendida y P. Plus",
+      "linea_menor": "Productos Plus",
+      "nombre_lob_mor": "N DM PLUS LIFESTYLE PROT"
+    },
+    {
+      "cod_subprofit_loc": 57,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Garantía Extendida y P. Plus",
+      "linea_menor": "Productos Plus",
+      "nombre_lob_mor": "N DM PLUS PRODUCT PROT"
+    },
+    {
+      "cod_subprofit_loc": 58,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Hogar",
+      "linea_menor": "Hogar DM",
+      "nombre_lob_mor": "DM HOGAR"
+    },
+    {
+      "cod_subprofit_loc": 59,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Vida Grupo",
+      "linea_menor": "Vida Grupo",
+      "nombre_lob_mor": "VIDA GRUPO"
+    },
+    {
+      "cod_subprofit_loc": 60,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Garantía Extendida y P. Plus",
+      "linea_menor": "Garantía Extendida",
+      "nombre_lob_mor": "DM WARRANTY PLUS"
+    },
+    {
+      "cod_subprofit_loc": 61,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Transportes",
+      "linea_menor": "Casco Transportes",
+      "nombre_lob_mor": "MARINE CASCO"
+    },
+    {
+      "cod_subprofit_loc": 62,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Transportes",
+      "linea_menor": "Cargo Transportes",
+      "nombre_lob_mor": "R. CIVIL DE AGENTES DE CARGA"
+    },
+    {
+      "cod_subprofit_loc": 64,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Transportes",
+      "linea_menor": "Maq. y Equipo Transportes",
+      "nombre_lob_mor": "INLAND MARINE"
+    },
+    {
+      "cod_subprofit_loc": 65,
+      "vicepresidencia": "Autos",
+      "linea_mayor": "Responsabilidad Civil Auto",
+      "linea_menor": "RCC Auto",
+      "nombre_lob_mor": "RC CONTRACTUAL AUTO"
+    },
+    {
+      "cod_subprofit_loc": 66,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Pymes",
+      "linea_menor": "Microseguros",
+      "nombre_lob_mor": "AGRO"
+    },
+    {
+      "cod_subprofit_loc": 67,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Hogar",
+      "linea_menor": "Mascotas",
+      "nombre_lob_mor": "MASCOTAS"
+    },
+    {
+      "cod_subprofit_loc": 69,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Accidentes Personales",
+      "linea_menor": "AP Grupo",
+      "nombre_lob_mor": "AP EMPRESARIAL"
+    },
+    {
+      "cod_subprofit_loc": 70,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Vida Grupo",
+      "linea_menor": "Vida Grupo",
+      "nombre_lob_mor": "VIDA EMPRESARIAL"
+    },
+    {
+      "cod_subprofit_loc": 72,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Líneas Financieras",
+      "linea_menor": "Arrendamiento",
+      "nombre_lob_mor": "ARRENDAMIENTO"
+    },
+    {
+      "cod_subprofit_loc": 80,
+      "vicepresidencia": "Fronting",
+      "linea_mayor": "Fronting Generales",
+      "linea_menor": "Fronting Generales",
+      "nombre_lob_mor": "GENERALES FRONTING"
+    },
+    {
+      "cod_subprofit_loc": 82,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Hogar",
+      "linea_menor": "Mortgage",
+      "nombre_lob_mor": "MORTGAGE"
+    },
+    {
+      "cod_subprofit_loc": 83,
+      "vicepresidencia": "Autos",
+      "linea_mayor": "Responsabilidad Civil Auto",
+      "linea_menor": "RCC Auto",
+      "nombre_lob_mor": "RC CONTRACTUAL AUTO"
+    },
+    {
+      "cod_subprofit_loc": 85,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Pymes",
+      "linea_menor": "Microseguros",
+      "nombre_lob_mor": "PYMES DM"
+    },
+    {
+      "cod_subprofit_loc": 86,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Vida Grupo",
+      "linea_menor": "Vida Grupo DM",
+      "nombre_lob_mor": "VIDA DM"
+    },
+    {
+      "cod_subprofit_loc": 87,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Pymes",
+      "linea_menor": "Pymes M",
+      "nombre_lob_mor": "PROPERTY SME"
+    },
+    {
+      "cod_subprofit_loc": 88,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Pymes",
+      "linea_menor": "Pymes P",
+      "nombre_lob_mor": "PYMES PE"
+    },
+    {
+      "cod_subprofit_loc": 89,
+      "vicepresidencia": "Generales",
+      "linea_mayor": "Líneas Financieras",
+      "linea_menor": "Cyber",
+      "nombre_lob_mor": "CYBER EDGE"
+    },
+    {
+      "cod_subprofit_loc": 90,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Accidentes Personales",
+      "linea_menor": "AP Grupo",
+      "nombre_lob_mor": "EXEQUIAL"
+    },
+    {
+      "cod_subprofit_loc": 91,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Accidentes Personales",
+      "linea_menor": "Accidentes Personales DM",
+      "nombre_lob_mor": "DM EXEQUIAL"
+    },
+    {
+      "cod_subprofit_loc": 92,
+      "vicepresidencia": "Autos",
+      "linea_mayor": "Auto Tradicional",
+      "linea_menor": "Auto Colectivas",
+      "nombre_lob_mor": "AUTOS_EMPRESARIAL"
+    },
+    {
+      "cod_subprofit_loc": 93,
+      "vicepresidencia": "Autos",
+      "linea_mayor": "Auto Tradicional",
+      "linea_menor": "Bicicletas",
+      "nombre_lob_mor": "BICICLETAS_EMPRESARIAL"
+    },
+    {
+      "cod_subprofit_loc": 94,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Hogar",
+      "linea_menor": "Hogar",
+      "nombre_lob_mor": "HOGAR EMPRESARIAL"
+    },
+    {
+      "cod_subprofit_loc": 95,
+      "vicepresidencia": "Personas",
+      "linea_mayor": "Garantía Extendida y P. Plus",
+      "linea_menor": "Productos Plus",
+      "nombre_lob_mor": "PPLUS_EMPRESARIAL"
+    },
+    {
+      "cod_subprofit_loc": 96,
+      "vicepresidencia": "Fronting",
+      "linea_mayor": "Fronting Autos",
+      "linea_menor": "Fronting Autos",
+      "nombre_lob_mor": "AUTOS FRONTING"
+    },
+    {
+      "cod_subprofit_loc": 97,
+      "vicepresidencia": "Fronting",
+      "linea_mayor": "Fronting Personas",
+      "linea_menor": "Fronting Personas",
+      "nombre_lob_mor": "PERSONAS FRONTING"
+    },
+    {
+      "cod_subprofit_loc": 98,
+      "vicepresidencia": "Multinacionales",
+      "linea_mayor": "Multinacionales",
+      "linea_menor": "Multinacionales",
+      "nombre_lob_mor": "MULTINACIONALES"
+    },
+    {
+      "cod_subprofit_loc": 99,
+      "vicepresidencia": "Multinacionales",
+      "linea_mayor": "Multinacionales",
+      "linea_menor": "Multinacionales",
+      "nombre_lob_mor": "MULTINACIONALES"
+    }
+  ],
+  "subprofit_links": [
+    {
+      "cod_subprofit": 3,
+      "cod_subprofit_loc": 72
+    },
+    {
+      "cod_subprofit": 4,
+      "cod_subprofit_loc": 32
+    },
+    {
+      "cod_subprofit": 7,
+      "cod_subprofit_loc": 60
+    },
+    {
+      "cod_subprofit": 8,
+      "cod_subprofit_loc": 8
+    },
+    {
+      "cod_subprofit": 10,
+      "cod_subprofit_loc": 51
+    },
+    {
+      "cod_subprofit": 11,
+      "cod_subprofit_loc": 1
+    },
+    {
+      "cod_subprofit": 12,
+      "cod_subprofit_loc": 2
+    },
+    {
+      "cod_subprofit": 12,
+      "cod_subprofit_loc": 96
+    },
+    {
+      "cod_subprofit": 13,
+      "cod_subprofit_loc": 3
+    },
+    {
+      "cod_subprofit": 14,
+      "cod_subprofit_loc": 43
+    },
+    {
+      "cod_subprofit": 15,
+      "cod_subprofit_loc": 15
+    },
+    {
+      "cod_subprofit": 16,
+      "cod_subprofit_loc": 16
+    },
+    {
+      "cod_subprofit": 19,
+      "cod_subprofit_loc": 19
+    },
+    {
+      "cod_subprofit": 20,
+      "cod_subprofit_loc": 20
+    },
+    {
+      "cod_subprofit": 21,
+      "cod_subprofit_loc": 13
+    },
+    {
+      "cod_subprofit": 22,
+      "cod_subprofit_loc": 24
+    },
+    {
+      "cod_subprofit": 22,
+      "cod_subprofit_loc": 65
+    },
+    {
+      "cod_subprofit": 23,
+      "cod_subprofit_loc": 25
+    },
+    {
+      "cod_subprofit": 24,
+      "cod_subprofit_loc": 26
+    },
+    {
+      "cod_subprofit": 25,
+      "cod_subprofit_loc": 30
+    },
+    {
+      "cod_subprofit": 26,
+      "cod_subprofit_loc": 31
+    },
+    {
+      "cod_subprofit": 30,
+      "cod_subprofit_loc": 39
+    },
+    {
+      "cod_subprofit": 30,
+      "cod_subprofit_loc": 80
+    },
+    {
+      "cod_subprofit": 31,
+      "cod_subprofit_loc": 28
+    },
+    {
+      "cod_subprofit": 32,
+      "cod_subprofit_loc": 4
+    },
+    {
+      "cod_subprofit": 32,
+      "cod_subprofit_loc": 80
+    },
+    {
+      "cod_subprofit": 33,
+      "cod_subprofit_loc": 21
+    },
+    {
+      "cod_subprofit": 34,
+      "cod_subprofit_loc": 53
+    },
+    {
+      "cod_subprofit": 37,
+      "cod_subprofit_loc": 54
+    },
+    {
+      "cod_subprofit": 41,
+      "cod_subprofit_loc": 11
+    },
+    {
+      "cod_subprofit": 41,
+      "cod_subprofit_loc": 80
+    },
+    {
+      "cod_subprofit": 42,
+      "cod_subprofit_loc": 22
+    },
+    {
+      "cod_subprofit": 42,
+      "cod_subprofit_loc": 80
+    },
+    {
+      "cod_subprofit": 43,
+      "cod_subprofit_loc": 23
+    },
+    {
+      "cod_subprofit": 43,
+      "cod_subprofit_loc": 80
+    },
+    {
+      "cod_subprofit": 44,
+      "cod_subprofit_loc": 29
+    },
+    {
+      "cod_subprofit": 45,
+      "cod_subprofit_loc": 35
+    },
+    {
+      "cod_subprofit": 51,
+      "cod_subprofit_loc": 34
+    },
+    {
+      "cod_subprofit": 59,
+      "cod_subprofit_loc": 59
+    },
+    {
+      "cod_subprofit": 59,
+      "cod_subprofit_loc": 97
+    },
+    {
+      "cod_subprofit": 61,
+      "cod_subprofit_loc": 99
+    },
+    {
+      "cod_subprofit": 62,
+      "cod_subprofit_loc": 98
+    },
+    {
+      "cod_subprofit": 64,
+      "cod_subprofit_loc": 55
+    },
+    {
+      "cod_subprofit": 64,
+      "cod_subprofit_loc": 99
+    },
+    {
+      "cod_subprofit": 66,
+      "cod_subprofit_loc": 66
+    },
+    {
+      "cod_subprofit": 67,
+      "cod_subprofit_loc": 40
+    },
+    {
+      "cod_subprofit": 67,
+      "cod_subprofit_loc": 56
+    },
+    {
+      "cod_subprofit": 67,
+      "cod_subprofit_loc": 80
+    },
+    {
+      "cod_subprofit": 68,
+      "cod_subprofit_loc": 57
+    },
+    {
+      "cod_subprofit": 69,
+      "cod_subprofit_loc": 69
+    },
+    {
+      "cod_subprofit": 70,
+      "cod_subprofit_loc": 70
+    },
+    {
+      "cod_subprofit": 80,
+      "cod_subprofit_loc": 80
+    },
+    {
+      "cod_subprofit": 81,
+      "cod_subprofit_loc": 5
+    },
+    {
+      "cod_subprofit": 81,
+      "cod_subprofit_loc": 58
+    },
+    {
+      "cod_subprofit": 82,
+      "cod_subprofit_loc": 82
+    },
+    {
+      "cod_subprofit": 83,
+      "cod_subprofit_loc": 83
+    },
+    {
+      "cod_subprofit": 85,
+      "cod_subprofit_loc": 85
+    },
+    {
+      "cod_subprofit": 86,
+      "cod_subprofit_loc": 86
+    },
+    {
+      "cod_subprofit": 87,
+      "cod_subprofit_loc": 87
+    },
+    {
+      "cod_subprofit": 88,
+      "cod_subprofit_loc": 88
+    },
+    {
+      "cod_subprofit": 89,
+      "cod_subprofit_loc": 80
+    },
+    {
+      "cod_subprofit": 89,
+      "cod_subprofit_loc": 89
+    },
+    {
+      "cod_subprofit": 90,
+      "cod_subprofit_loc": 90
+    },
+    {
+      "cod_subprofit": 91,
+      "cod_subprofit_loc": 9
+    },
+    {
+      "cod_subprofit": 91,
+      "cod_subprofit_loc": 80
+    },
+    {
+      "cod_subprofit": 91,
+      "cod_subprofit_loc": 91
+    },
+    {
+      "cod_subprofit": 92,
+      "cod_subprofit_loc": 92
+    },
+    {
+      "cod_subprofit": 93,
+      "cod_subprofit_loc": 93
+    },
+    {
+      "cod_subprofit": 94,
+      "cod_subprofit_loc": 94
+    },
+    {
+      "cod_subprofit": 95,
+      "cod_subprofit_loc": 95
+    },
+    {
+      "cod_subprofit": 101,
+      "cod_subprofit_loc": 6
+    },
+    {
+      "cod_subprofit": 102,
+      "cod_subprofit_loc": 12
+    },
+    {
+      "cod_subprofit": 103,
+      "cod_subprofit_loc": 7
+    },
+    {
+      "cod_subprofit": 103,
+      "cod_subprofit_loc": 80
+    },
+    {
+      "cod_subprofit": 104,
+      "cod_subprofit_loc": 17
+    },
+    {
+      "cod_subprofit": 105,
+      "cod_subprofit_loc": 33
+    },
+    {
+      "cod_subprofit": 105,
+      "cod_subprofit_loc": 80
+    },
+    {
+      "cod_subprofit": 106,
+      "cod_subprofit_loc": 18
+    },
+    {
+      "cod_subprofit": 106,
+      "cod_subprofit_loc": 80
+    },
+    {
+      "cod_subprofit": 107,
+      "cod_subprofit_loc": 41
+    },
+    {
+      "cod_subprofit": 111,
+      "cod_subprofit_loc": 10
+    },
+    {
+      "cod_subprofit": 111,
+      "cod_subprofit_loc": 80
+    },
+    {
+      "cod_subprofit": 112,
+      "cod_subprofit_loc": 61
+    },
+    {
+      "cod_subprofit": 113,
+      "cod_subprofit_loc": 62
+    },
+    {
+      "cod_subprofit": 115,
+      "cod_subprofit_loc": 64
+    },
+    {
+      "cod_subprofit": 140,
+      "cod_subprofit_loc": 14
+    },
+    {
+      "cod_subprofit": 167,
+      "cod_subprofit_loc": 67
+    },
+    {
+      "cod_subprofit": 861,
+      "cod_subprofit_loc": 42
+    },
+    {
+      "cod_subprofit": 861,
+      "cod_subprofit_loc": 80
+    },
+    {
+      "cod_subprofit": 1340,
+      "cod_subprofit_loc": 48
+    },
+    {
+      "cod_subprofit": 1343,
+      "cod_subprofit_loc": 46
+    },
+    {
+      "cod_subprofit": 1381,
+      "cod_subprofit_loc": 38
+    },
+    {
+      "cod_subprofit": 1382,
+      "cod_subprofit_loc": 37
+    },
+    {
+      "cod_subprofit": 2702,
+      "cod_subprofit_loc": 45
+    },
+    {
+      "cod_subprofit": 3058,
+      "cod_subprofit_loc": 49
+    },
+    {
+      "cod_subprofit": 3058,
+      "cod_subprofit_loc": 80
+    },
+    {
+      "cod_subprofit": 5401,
+      "cod_subprofit_loc": 36
+    },
+    {
+      "cod_subprofit": 5401,
+      "cod_subprofit_loc": 80
+    }
+  ]
+}

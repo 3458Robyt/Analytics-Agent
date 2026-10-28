@@ -16,7 +16,7 @@ class LLMError(RuntimeError):
     """The configured model endpoint could not return a usable response."""
 
 
-AGENT_SYSTEM_PROMPT_VERSION = "v2.1"
+AGENT_SYSTEM_PROMPT_VERSION = "v2.2"
 
 
 def load_default_agent_system_prompt() -> str:
@@ -272,10 +272,11 @@ class OpenAICompatibleProvider:
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ), max_tokens=2600, source="El modelo")
+        provided_fields = set(result)
         action = result.get("action")
         if action not in {
             "plan", "clarify", "search_tables", "search_memory", "search_knowledge", "describe_tables",
-            "run_metric", "run_select", "read_page", "inspect_result", "create_excel", "finish",
+            "run_metric", "run_analysis", "run_select", "read_page", "inspect_result", "create_excel", "finish",
         }:
             raise LLMError("El modelo devolvió una acción desconocida")
         result.setdefault("notes", "")
@@ -297,6 +298,9 @@ class OpenAICompatibleProvider:
         result.setdefault("present_rows", False)
         result.setdefault("group_by", [])
         result.setdefault("filters", [])
+        result.setdefault("metric_keys", [])
+        result.setdefault("time_grain", "total")
+        result.setdefault("population", {})
         result.setdefault("query_ids", [])
         result.setdefault("limit", 20)
         result.setdefault("clarification", {})
@@ -309,9 +313,16 @@ class OpenAICompatibleProvider:
                     raise LLMError(f"`clarification.{field}` debe ser texto")
             if not result["clarification"]["question"].strip():
                 raise LLMError("La aclaración debe contener una pregunta concreta")
-        if action == "run_metric":
-            if not result["metric_key"].strip():
+        if action in {"run_metric", "run_analysis"}:
+            if action == "run_metric" and not result["metric_key"].strip():
                 raise LLMError("`metric_key` no puede estar vacío")
+            if action == "run_analysis":
+                if not isinstance(result["metric_keys"], list) or not all(isinstance(key, str) for key in result["metric_keys"]):
+                    raise LLMError("`metric_keys` debe ser una lista de métricas")
+                if result["time_grain"] not in {"total", "month"}:
+                    raise LLMError("`time_grain` debe ser total o month")
+                if not isinstance(result["population"], dict):
+                    raise LLMError("`population` debe ser un objeto")
             if bool(result["start_date"].strip()) != bool(result["end_date"].strip()):
                 raise LLMError("Indica inicio y fin exclusivo juntos, o ambos vacíos si no hay periodo")
             if not isinstance(result["group_by"], list) or not all(isinstance(item, str) for item in result["group_by"]):
@@ -377,6 +388,10 @@ class OpenAICompatibleProvider:
             )
             if not isinstance(result["present_rows"], bool):
                 raise LLMError("`present_rows` debe ser booleano")
+        if action == "run_analysis":
+            for field in ("group_by", "filters", "time_grain", "population"):
+                if field not in provided_fields:
+                    result.pop(field, None)
         return result, usage
 
     def review_learning(

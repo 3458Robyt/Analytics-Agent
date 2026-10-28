@@ -84,6 +84,7 @@ def compile_metric_query(
     filters: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] = (),
     timezone: str = "America/Bogota",
     allow_unbounded: bool = False,
+    payment_date_basis: str = "accident",
 ) -> MetricQuery:
     """Compile a confirmed metric and typed, allowlisted query parameters."""
     unbounded = allow_unbounded and not start_date and not end_date
@@ -97,7 +98,13 @@ def compile_metric_query(
 
     table_id = str(definition.get("table_id", ""))
     value_field = str(definition.get("value_field", ""))
+    if definition.get("kind", "base") != "base":
+        raise MetricDefinitionError("Esta métrica compuesta requiere run_analysis")
     date_field = str(definition.get("date_field", ""))
+    if definition.get("time_behavior") in {"accident_date_flow", "payment_date_flow"}:
+        if payment_date_basis not in {"accident", "payment"}:
+            raise MetricDefinitionError("La fecha de pagos debe ser accidente o pago")
+        date_field = definition.get("date_bases", {}).get(payment_date_basis, date_field)
     aggregation = str(definition.get("aggregation", "")).upper()
     allowed_dimensions = definition.get("dimensions", {})
     if not re.fullmatch(r"[\w-]+\.[\w-]+\.[\w-]+", table_id):

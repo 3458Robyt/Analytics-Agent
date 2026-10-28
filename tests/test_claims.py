@@ -17,7 +17,7 @@ class ClaimsRulesTests(unittest.TestCase):
 
     def test_all_four_categories_compile_distinct_protected_filters(self):
         for key, label, date in (
-            ("pagos_siniestros", "pagos", "fecha_pago"),
+            ("pagos_siniestros", "pagos", "fecha_accidente"),
             ("reservas_avisadas", "avisado", "mes_mmalla"),
             ("avisos_recobro", "aviso de recobro", "mes_mmalla"),
             ("avisados_salvamentos", "avisado de salvamentos", "mes_mmalla"),

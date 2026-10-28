@@ -132,6 +132,23 @@ class BigQueryAdapter:
     def _short_table_name(value: str) -> str:
         return value.rsplit(".", 1)[-1].rsplit(":", 1)[-1]
 
+    def inspect_routine_metadata(self, routine_id: str) -> dict[str, Any]:
+        """Read the actual ordered signature, never infer it from successful SQL."""
+        try:
+            raw = self.client.get_routine(routine_id).to_api_repr()
+        except Exception as error:
+            raise BigQueryError(_safe_error(error)) from error
+        return {
+            "routine_id": routine_id,
+            "routine_type": raw.get("routineType", ""),
+            "language": raw.get("language", "SQL"),
+            "remote": bool(raw.get("remoteFunctionOptions")),
+            "arguments": [{"name": arg.get("name", ""),
+                           "data_type": arg.get("dataType", {}).get("typeKind", "")}
+                          for arg in raw.get("arguments", [])],
+            "last_modified": raw.get("lastModifiedTime", ""),
+        }
+
     def discover_tables(self, seed_projects: tuple[str, ...] | list[str] = ()) -> DiscoveryReport:
         """List projects, datasets and tables visible to the runtime identity."""
         warnings: list[str] = []
