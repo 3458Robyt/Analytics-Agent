@@ -59,6 +59,7 @@ def routine_roles(metadata: Mapping[str, Any]) -> tuple[str, ...]:
 def _dimension(field: str) -> str:
     name = dimension_name(field)
     return {"nombre_sucursal": "sucursal", "nombre_ramo_comercial": "ramo", "ramo_comercial": "ramo",
+            "cod_ramo": "codigo_ramo", "cod_ramo_com": "codigo_ramo", "cod_ramo_cont": "codigo_ramo_contable",
             "ramo comercial": "ramo", "lob_l1": "vicepresidencia", "lob_l2": "linea_mayor",
             "lob_l3": "linea_menor"}.get(name, name)
 
@@ -67,8 +68,10 @@ def _field(field: str, definition: Mapping[str, Any], table: TableSchema | None)
     semantic = _dimension(field)
     claims = definition["table_id"].endswith(".mm_final")
     physical = ({"vicepresidencia": "lob_l1", "linea_mayor": "lob_l2", "linea_menor": "lob_l3",
-                 "ramo": "ramo_comercial", "sucursal": "nombre_sucursal"} if claims else
-                {"ramo": "nombre_ramo_comercial", "sucursal": "nombre_sucursal"}).get(semantic, semantic)
+                 "ramo": "ramo_comercial", "sucursal": "nombre_sucursal", "codigo_ramo": "cod_ramo_com",
+                 "codigo_ramo_contable": "ramo_contable"} if claims else
+                {"ramo": "nombre_ramo_comercial", "sucursal": "nombre_sucursal", "codigo_ramo": "cod_ramo_com",
+                 "codigo_ramo_contable": "cod_ramo_cont"}).get(semantic, semantic)
     allowed = set(table.columns) if table and table.metadata_loaded else set(definition.get("dimensions", {})) | set(definition.get("filter_fields", {}))
     if physical not in allowed:
         candidates = [name for name, config in definition.get("dimensions", {}).items()

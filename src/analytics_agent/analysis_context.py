@@ -152,15 +152,73 @@ def requested_metrics(question: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(keys))
 
 
+BRANCH_NAME_FIELDS = {"ramo", "nombre_ramo_comercial", "ramo_comercial", "descripcion_ramo_com",
+                      "nombre_ramo_tecnico", "desc_ramo_contable"}
+BRANCH_CODE_FIELDS = {"codigo_ramo", "cod_ramo", "cod_ramo_com", "cod_ramo_tec", "cod_ramo_cont",
+                      "codigo_ramo_contable", "ramo_contable"}
+
+
+def _branch_code_field(target: str) -> str:
+    if "tecnico" in target or "cod_ramo_tec" in target:
+        return "cod_ramo_tec"
+    if "contable" in target or "cod_ramo_cont" in target:
+        return "codigo_ramo_contable"
+    return "codigo_ramo"
+
+
+def wants_branch_code(question: str) -> bool:
+    text = normalized(question)
+    target = r"(?:cod_ramo(?:_(?:com|tec|cont))?|codigo_ramo|(?:codigo|numero)\s+(?:del?\s+)?ramo)\b"
+    if re.search(r"\b(?:no(?: (?:uses?|usar|debes? usar))?|en vez (?:del?|de)|en lugar (?:del?|de))\s+(?:el\s+)?" + target, text):
+        return False
+    return bool(re.search(r"\b" + target, text))
+
+
+def branch_scope_filter(question: str) -> dict[str, Any] | None:
+    """Parse an explicit branch identifier, never arbitrary prose after 'ramo'."""
+    text = normalized(question)
+    target = (r"(?:cod_ramo(?:_(?:com|tec|cont))?|codigo_ramo|(?:codigo|numero)\s+(?:del?\s+)?"
+              r"ramo(?:\s+(?:comercial|tecnico|contable))?|ramos?(?:\s+(?:comercial|tecnico|contable))?"
+              r"(?:\s+(?:codigo|numero|nro\.?|no\.?))?)")
+    match = re.search(r"\b(?P<target>" + target + r")\s*(?:(?:es|=|:|#)\s*)?[`'\"]?(?P<code>\d+)(?![\w.])", text)
+    if match:
+        values = [match["code"]]
+        tail = text[match.end():].lstrip("`'\"")
+        while following := re.match(r"\s*(?:,|y|o)\s*[`'\"]?(\d+)(?![\w.])[`'\"]?", tail):
+            values.append(following[1])
+            tail = tail[following.end():]
+        values = list(dict.fromkeys(values))
+        return {"field": _branch_code_field(match["target"]), "operator": "in" if len(values) > 1 else "eq",
+                "value": values if len(values) > 1 else values[0]}
+    head = re.search(r"\bramo(?:\s+(?:comercial|t[eé]cnico|contable))?\s+(?:de\s+)?[=:\s]*", question, re.I)
+    if not head:
+        return None
+    tail = question[head.end():].strip()
+    quoted = re.match(r"([`'\"])(.+?)\1", tail)
+    if quoted:
+        label = quoted[2].strip()
+    else:
+        label = re.split(r"[,;\n?'\"`]|\s+(?:en|para|durante|por|desde|hasta|del|de (?:20\d{2}|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre))\b",
+                         tail, maxsplit=1, flags=re.I)[0].strip()
+        words = normalized(label).split()
+        invalid = {"en", "para", "durante", "por", "del", "de", "y", "comercial", "tecnico", "contable",
+                   "debes", "debe", "deberias", "usa", "usar", "uses", "utiliza", "utilizar", "no", "es", "son",
+                   "se", "que", "tiene", "nombre", "numero", "codigo", "campo", "el", "lo"}
+        if (not words or words[0] in invalid or not label[0].isalpha()
+                or any(word in invalid - {"de", "del", "y", "el", "comercial", "tecnico", "contable"} for word in words)
+                or re.search(r"\bcod_\w+", normalized(label))):
+            return None
+    if not label or len(label) > 120:
+        return None
+    head_text = normalized(head[0])
+    field = ("nombre_ramo_tecnico" if "tecnic" in head_text else
+             "desc_ramo_contable" if "contable" in head_text else "ramo")
+    return {"field": field, "operator": "eq", "value": label}
+
+
 def explicit_branch(question: str) -> str:
-    """A named branch is distinct from asking for a breakdown 'por ramo'."""
-    match = re.search(r"\bramo(?:\s+comercial)?\s+(?:de\s+)?(?:[=:'\"`]*)([^\n?]+)", question, re.I)
-    if not match:
-        return ""
-    label = re.split(r"['\"`]|\s+(?:en|para|durante|por|desde|hasta|del|de (?:20\d{2}|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre))\b", match[1], maxsplit=1, flags=re.I)[0].strip()
-    if normalized(label).split(" ")[0] in {"en", "para", "durante", "por", "del", "de", "y", "comercial"}:
-        return ""
-    return label
+    scope = branch_scope_filter(question)
+    return str(scope["value"]) if scope and scope["field"] in BRANCH_NAME_FIELDS else ""
 
 
 def resolve_analysis(action: Mapping[str, Any], question: str, *, today: date,
@@ -208,8 +266,14 @@ def resolve_analysis(action: Mapping[str, Any], question: str, *, today: date,
         raise MetricDefinitionError("Indica un inicio y final exclusivo válidos")
     organization = organization or OrganizationCatalog()
     population = organization.from_question(question)
-    branch = explicit_branch(question)
-    if population is None and branch and previous:
+    branch = branch_scope_filter(question)
+    previous_branch = any(item.get("field") in BRANCH_CODE_FIELDS | BRANCH_NAME_FIELDS
+                          for item in previous.get("filters", ()))
+    correction_wording = bool(re.search(r"\b(?:te dije|te di|debes?|usa|usar|utiliza|no (?:el )?nombre)\b", text))
+    code_correction = wants_branch_code(question) and branch is None and (previous_branch or correction_wording)
+    if code_correction and previous and not requested:
+        keys = tuple(previous.get("metric_keys", keys))
+    if population is None and (branch or code_correction) and previous:
         population = {}  # explicitly switching dimension must not keep the old LOB scope
     elif population is None:
         population = dict(previous.get("population", {}))
@@ -243,9 +307,30 @@ def resolve_analysis(action: Mapping[str, Any], question: str, *, today: date,
         by_field = {item["field"]: dict(item) for item in previous["filters"]}
         by_field.update({item["field"]: dict(item) for item in action["filters"]})
         filters = tuple(by_field.values())
+    if code_correction:
+        # Recover the previous identifier before merging model filters. A
+        # correction is not a new value, and must remove the old name predicate.
+        stored = list(previous.get("filters", ()))
+        codes = [item for item in stored if item.get("field") in BRANCH_CODE_FIELDS]
+        if not codes:
+            codes = [item for item in filters if item.get("field") in BRANCH_CODE_FIELDS]
+        if codes:
+            branch = dict(codes[0])
+            branch["field"] = _branch_code_field(str(branch["field"]))
+            explicit_kind = _branch_code_field(text)
+            if explicit_kind != "codigo_ramo" and explicit_kind != branch["field"]:
+                raise MetricDefinitionError("El código técnico o contable no equivale al comercial anterior; indica el código de esa clasificación")
+        else:
+            numeric_names = [item for item in stored if item.get("field") in BRANCH_NAME_FIELDS
+                             and re.fullmatch(r"\d+", str(item.get("value", "")))]
+            if numeric_names:
+                branch = {"field": "codigo_ramo", "operator": "eq", "value": str(numeric_names[0]["value"])}
+            else:
+                raise MetricDefinitionError("No se pudo recuperar el número del ramo anterior; indica el código que quieres consultar")
     if branch:
-        filters = tuple(item for item in filters if item.get("field") not in {"ramo", "nombre_ramo_comercial", "ramo_comercial", "cod_subprofit_loc", "linea_mayor", "lob_l2"})
-        filters = (*filters, {"field": "ramo", "operator": "eq", "value": branch})
+        filters = tuple(item for item in filters if item.get("field") not in BRANCH_NAME_FIELDS | BRANCH_CODE_FIELDS
+                        | {"cod_subprofit_loc", "linea_mayor", "lob_l2"})
+        filters = (*filters, branch)
     elif population:
         # A model's inferred branch must not override an employee's named LOB.
         filters = tuple(item for item in filters if not (

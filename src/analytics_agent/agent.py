@@ -27,7 +27,7 @@ from .claims import (
 from .field_resolution import UnknownFieldError, resolve_field, resolve_sql_fields
 from .query_scope import DateScopeRequired, all_history, has_period, needs_period
 from .text_encoding import INPUT_REPAIR_NOTICE, dumps_json, repair_text
-from .analysis_context import requested_metrics, resolve_analysis
+from .analysis_context import branch_scope_filter, requested_metrics, resolve_analysis, wants_branch_code
 from .analysis_sql import ROUTINE_ID, compile_analysis, routine_roles
 from .organization import OrganizationCatalog
 from .presentation import analysis_presentation
@@ -1388,6 +1388,7 @@ class AnalyticsAgent:
                             self.metric_definitions.get(action.get("metric_key", ""), {}).get("kind", "base") != "base"
                             or len(requested_metrics(question)) > 1
                             or self.organization.from_question(question)
+                            or branch_scope_filter(question) is not None or wants_branch_code(question)
                         ):
                             action = {**action, "action": "run_analysis"}
                         if action["action"] == "run_analysis":

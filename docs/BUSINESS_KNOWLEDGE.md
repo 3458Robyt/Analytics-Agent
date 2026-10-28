@@ -13,6 +13,7 @@ Se revisaron los comentarios, la transcripción y el Excel organizacional entreg
 | Siniestralidad interna | Pagos / prima devengada × 100. El denominador emitido requiere solicitud explícita. |
 | Área | Línea mayor: `linea_mayor` en primas; `lob_l2` en siniestros. LOB1 es VP y LOB3 línea menor. |
 | Copropiedades | Clasificación organizacional: código local 34, VP Generales, línea mayor/menor Copropiedades, MOR PYMES. Un ramo comercial explícito sigue siendo un filtro de ramo. |
+| Ramo numérico | «Ramo 201» filtra únicamente el código comercial `cod_ramo_com`, con parámetro del tipo real de la columna. No añade un filtro de nombre con el valor «201». Una corrección a código reemplaza el filtro de nombre previo y conserva el identificador y el periodo. Los códigos técnico y contable se mantienen separados. |
 | Últimos seis meses | Seis meses calendario incluyendo el actual, hasta hoy; el actual se identifica como parcial. «Meses cerrados» excluye el actual. |
 
 Estas son definiciones internas revisadas para esta POC. No convierten automáticamente pagos en siniestralidad incurrida, reservas agregadas en saldos actuariales ni importes de la fuente en una moneda determinada.
