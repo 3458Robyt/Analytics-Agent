@@ -20,6 +20,7 @@ from .teams_common import (
 )
 from .teams_state import TeamsWorkerStore
 from .chat_commands import CommandResult, handle_command
+from .text_encoding import dumps_json, repair_text
 
 LOGGER = logging.getLogger("analytics_agent.teams_worker")
 PAGE_SIZE = 10
@@ -273,7 +274,7 @@ class TeamsRequestProcessor:
         self.runtime_config = runtime_config
 
     def _publish_response(self, response: Mapping[str, Any]) -> None:
-        payload = json.dumps(response, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
+        payload = dumps_json(response, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
         key_source = f"{response.get('tenant_id', '')}:{response.get('user_id', '')}:{response.get('conversation_id', '')}"
         ordering_key = hashlib.sha256(key_source.encode("utf-8")).hexdigest()[:40]
         self.publisher.publish(self.response_topic, payload, ordering_key=ordering_key).result(timeout=60)
@@ -321,7 +322,7 @@ class TeamsRequestProcessor:
                 return _response(request, text="Ese resultado ya venció. Vuelve a enviar la consulta.")
             return _trace_response(request, record)
         conversation = self.store.conversation(owner, conversation_id)
-        text = str(request.get("text", "")).strip()
+        text = repair_text(str(request.get("text", ""))).strip()
         from .memory import SessionStore
 
         with SessionStore(self.store.path.parent, owner=owner) as sessions:
@@ -460,7 +461,7 @@ class TeamsRequestProcessor:
 def _heartbeat_loop(publisher: Any, topic: str, instance_id: str, stop: threading.Event) -> None:
     while not stop.is_set():
         try:
-            payload = json.dumps({"kind": "heartbeat", "worker_id": instance_id, "seen_at": time.time()}).encode()
+            payload = dumps_json({"kind": "heartbeat", "worker_id": instance_id, "seen_at": time.time()}).encode()
             publisher.publish(topic, payload).result(timeout=30)
         except Exception:
             LOGGER.exception("No se pudo enviar el heartbeat de Workbench")

@@ -26,6 +26,7 @@ from .claims import (
 )
 from .field_resolution import UnknownFieldError, resolve_field, resolve_sql_fields
 from .query_scope import DateScopeRequired, all_history, has_period, needs_period
+from .text_encoding import INPUT_REPAIR_NOTICE, dumps_json, repair_text
 
 
 class AnalyticsAgent:
@@ -93,7 +94,7 @@ class AnalyticsAgent:
 
     @staticmethod
     def _fingerprint(value: Any) -> str:
-        payload = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+        payload = dumps_json(value, ensure_ascii=False, sort_keys=True, default=str)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def _ensure_table(
@@ -326,6 +327,23 @@ class AnalyticsAgent:
                session_store: Any | None = None, session_id: str = "", pending_turn_id: str = "",
                clarification_response: str = "") -> AgentAnswer:
         """Record every attempt, including provider failures and deferred date clarification."""
+        clean_question = repair_text(question)
+        clean_clarification = repair_text(clarification_response)
+        if on_progress is not None and (clean_question != question or clean_clarification != clarification_response):
+            on_progress(INPUT_REPAIR_NOTICE)
+        question, clarification_response = clean_question, clean_clarification
+        context = repair_text(context)
+        if on_clarification is not None:
+            original_callback = on_clarification
+
+            def readable_clarification(request: Clarification) -> str:
+                raw = original_callback(request)
+                cleaned = repair_text(raw)
+                if cleaned != raw and on_progress is not None:
+                    on_progress(INPUT_REPAIR_NOTICE)
+                return cleaned
+
+            on_clarification = readable_clarification
         from .llm import AGENT_SYSTEM_PROMPT_VERSION, load_default_agent_system_prompt
         for _attempt in range(3):
             started = time.perf_counter()

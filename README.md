@@ -164,6 +164,10 @@ El agente envía al modelo todas las filas cuando el resultado serializado cabe 
 
 Pide en `chat` algo como «Exporta el último resultado a Excel». El archivo `.xlsx` se guarda en `ANALYTICS_AGENT_EXPORT_DIR` (por defecto `./exports`, relativa a la carpeta desde la que ejecutaste el comando). En Workbench abre esa carpeta en el navegador de archivos de JupyterLab y descarga el Excel. Incluye hojas con datos, resumen de consulta y parte en hojas adicionales si supera el máximo de filas de Excel. Para continuar la misma conversación o exportar un resultado anterior, usa `analytics-agent chat --resume ID_SESION`; cada `ask` puntual inicia una sesión nueva.
 
+## Caracteres de la terminal
+
+El agente repara caracteres dañados recibidos de la terminal antes de guardar preguntas, aclaraciones o feedback. `?`, `¿`, tildes, ñ y emojis válidos se conservan. Si aparece el aviso **«Se repararon caracteres dañados»**, los caracteres irrecuperables se muestran como `�`; revisa el texto y vuelve a escribir la parte afectada si cambia su sentido. La sesión continúa abierta y no requiere cambiar permisos ni borrar el historial.
+
 ## Pruebas locales
 
 Las pruebas usan clientes simulados, no llaman a BigQuery ni al proveedor de IA:

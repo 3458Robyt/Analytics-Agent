@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import contextvars
 import hashlib
-import json
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Iterator, Mapping, Sequence
 from uuid import uuid4
+
+from .text_encoding import dumps_json, repair_text
 
 
 _request_id_context: contextvars.ContextVar[str] = contextvars.ContextVar(
@@ -61,6 +62,8 @@ class QueryPage:
 
 
 def _to_json_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return repair_text(value)
     if isinstance(value, (date, datetime)):
         return value.isoformat()
     if isinstance(value, Decimal):
@@ -68,11 +71,11 @@ def _to_json_value(value: Any) -> Any:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     if isinstance(value, Mapping):
-        return {str(key): _to_json_value(item) for key, item in value.items()}
+        return {repair_text(str(key)): _to_json_value(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_to_json_value(item) for item in value]
     if hasattr(value, "items") and callable(value.items):
-        return {str(key): _to_json_value(item) for key, item in value.items()}
+        return {repair_text(str(key)): _to_json_value(item) for key, item in value.items()}
     return value
 
 
@@ -296,7 +299,7 @@ class BigQueryAdapter:
                 config.query_parameters = self._query_parameters(bigquery, parameters)
             request_id = _request_id_context.get()
             if request_id:
-                canonical_parameters = json.dumps(list(parameters), sort_keys=True, default=str, ensure_ascii=False)
+                canonical_parameters = dumps_json(list(parameters), sort_keys=True, default=str, ensure_ascii=False)
                 digest = hashlib.sha256(
                     (request_id + "\0" + sql + "\0" + canonical_parameters).encode("utf-8")
                 ).hexdigest()[:48]
@@ -376,7 +379,7 @@ class BigQueryAdapter:
             for field in schema if getattr(field, "name", "")
         }
         rows = tuple(
-            {str(key): _to_json_value(value) for key, value in row.items()}
+            {repair_text(str(key)): _to_json_value(value) for key, value in row.items()}
             for row in page
         )
         has_next = bool(getattr(page, "next_page_token", None))

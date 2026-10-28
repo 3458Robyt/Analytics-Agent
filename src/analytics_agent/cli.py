@@ -33,6 +33,7 @@ from .models import AgentAnswer, AgentSettings, SummaryTable
 from .schema import DictionaryError, SchemaCatalog, load_dictionary
 from .evaluation import evaluate_prompt, load_evaluation_cases
 from .chat_commands import CommandResult, handle_command
+from .text_encoding import INPUT_REPAIR_NOTICE, repair_text
 
 
 DEFAULT_WORKBOOK_URI = (
@@ -185,7 +186,14 @@ def _build_llm(config: RuntimeConfig) -> OpenAICompatibleProvider:
 def _read_clarification(clarification: Any, console: Console) -> str:
     title = "Periodo de la consulta" if getattr(clarification, "reason", "") == "date_scope" else "Aclaración de negocio"
     console.print(Panel(clarification.question, title=title, border_style="yellow"))
-    return input("Aclaración: ").strip()
+    return _readable_input(input("Aclaración: "), console).strip()
+
+
+def _readable_input(text: str, console: Console) -> str:
+    cleaned = repair_text(text)
+    if cleaned != text:
+        console.print(INPUT_REPAIR_NOTICE, style="yellow", markup=False)
+    return cleaned
 
 
 def _run_learning_jobs(
@@ -429,6 +437,7 @@ def _run_ask(
     presentation: str = "",
     env_file: str = ".env",
 ) -> int:
+    question = _readable_input(question, console)
     agent, _ = _build_agent(config, console)
     with SessionStore(config.state_dir or None) as store:
         session_id = store.create_session(question)
@@ -469,7 +478,7 @@ def _run_chat(
         selected_presentation = presentation or config.presentation
         while True:
             try:
-                question = input("Tú: ").strip()
+                question = _readable_input(input("Tú: "), console).strip()
             except EOFError:
                 console.print()
                 return 0

@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from .workspace_state import now_utc
+from .text_encoding import repair_text
 
 
 @dataclass
@@ -19,7 +20,7 @@ class CommandResult:
 
 def handle_command(store: Any, session_id: str, text: str, *, channel: str,
                    request_id: str = "") -> CommandResult | None:
-    parts = text.strip().split(maxsplit=1)
+    parts = repair_text(text).strip().split(maxsplit=1)
     if not parts or not parts[0].startswith("/"):
         return None
     command, argument = parts[0].lower(), parts[1].strip() if len(parts) > 1 else ""

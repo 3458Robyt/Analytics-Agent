@@ -9,6 +9,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from .text_encoding import dumps_json, repair_payload, repair_text
+
 
 class LLMError(RuntimeError):
     """The configured model endpoint could not return a usable response."""
@@ -42,7 +44,7 @@ def _parse_json_object(text: str, *, source: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             continue
         if isinstance(result, dict):
-            return result
+            return repair_payload(result)
     if saw_object_start:
         raise LLMError(f"{source} devolvió JSON inválido")
     raise LLMError(f"{source} no devolvió un objeto JSON")
@@ -118,7 +120,7 @@ class OpenAICompatibleProvider:
                 "temperature": 0,
                 "max_tokens": max_tokens,
             }
-        payload = json.dumps(request_payload).encode("utf-8")
+        payload = dumps_json(request_payload).encode("utf-8")
         request = Request(
             self.url,
             data=payload,
@@ -131,7 +133,7 @@ class OpenAICompatibleProvider:
         )
         try:
             with self.opener(request, timeout=self.timeout_seconds) as response:
-                decoded = json.loads(response.read().decode("utf-8"))
+                decoded = repair_payload(json.loads(response.read().decode("utf-8")))
         except HTTPError as exc:
             raise LLMError(f"El endpoint de IA respondió HTTP {exc.code}") from exc
         except (URLError, TimeoutError, OSError) as exc:
@@ -186,7 +188,7 @@ class OpenAICompatibleProvider:
             }
         if not text.strip():
             raise LLMError("El endpoint de IA no devolvió texto utilizable")
-        return Completion(text=text, usage=usage)
+        return Completion(text=repair_text(text), usage=usage)
 
     def _complete_json(
         self,
@@ -253,7 +255,7 @@ class OpenAICompatibleProvider:
     ) -> tuple[dict[str, Any], Mapping[str, int]]:
         """Ask the model for the next catalog/query action or its final answer."""
         system = self.agent_system_prompt or load_default_agent_system_prompt()
-        user = json.dumps({
+        user = dumps_json({
             "pregunta_de_negocio": question,
             "criterios_de_interpretacion": context,
             "memoria_recuperada": retrieved_memory,
@@ -409,7 +411,7 @@ No conviertas una interpretación tentativa, un silencio o una única consulta e
         }
         result, usage = self._complete_json((
             {"role": "system", "content": system},
-            {"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)},
+            {"role": "user", "content": dumps_json(payload, ensure_ascii=False, default=str)},
         ), max_tokens=900, source="El curador de aprendizaje")
         result.setdefault("user_correction_detected", False)
         if not isinstance(result["user_correction_detected"], bool):
@@ -464,7 +466,7 @@ No conviertas una interpretación tentativa, un silencio o una única consulta e
         }
         result, usage = self._complete_json((
             {"role": "system", "content": system},
-            {"role": "user", "content": json.dumps(review_input, ensure_ascii=False, default=str)},
+            {"role": "user", "content": dumps_json(review_input, ensure_ascii=False, default=str)},
         ), max_tokens=1200, source="El revisor")
         if not isinstance(result.get("accepted"), bool):
             raise LLMError("La decisión del revisor debe incluir `accepted` booleano")

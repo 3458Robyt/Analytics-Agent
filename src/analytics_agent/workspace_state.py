@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
 from sqlglot import exp, parse_one
+from .text_encoding import dumps_json, repair_text
 
 
 def now_utc() -> str:
@@ -28,7 +29,7 @@ def positive_env(name: str, default: int) -> int:
 
 
 def safe_text(value: Any, limit: int = 2000) -> str:
-    text = str(value)
+    text = repair_text(str(value))
     text = re.sub(r"\bsk-[A-Za-z0-9_-]{12,}", "[credencial omitida]", text)
     text = re.sub(r"(?i)(bearer\s+)[\w.~-]+", r"\1[omitido]", text)
     return text[:limit]
@@ -37,7 +38,7 @@ def safe_text(value: Any, limit: int = 2000) -> str:
 def query_pattern(sql: str) -> str:
     """Group the shape of queries without retaining their parameter values."""
     try:
-        tree = parse_one(sql, read="bigquery")
+        tree = parse_one(repair_text(sql), read="bigquery")
         tree = tree.transform(lambda node: exp.Var(this="?") if isinstance(node, exp.Literal) else node)
         return tree.sql(dialect="bigquery", normalize=True)
     except Exception:
@@ -128,7 +129,7 @@ class WorkspaceStateMixin:
             data = without_rows(json.loads(row["result_json"]))
             data["results_expired"] = True
             self.connection.execute("UPDATE actions SET result_json = ? WHERE action_id = ?",
-                                    (json.dumps(data, ensure_ascii=False), row["action_id"]))
+                                    (dumps_json(data, ensure_ascii=False), row["action_id"]))
         for table in ("feedback", "query_metrics", "request_metrics", "chat_command_results", "result_links"):
             self.connection.execute(f"DELETE FROM {table} WHERE created_at < ?", (history_cutoff,))
         self.connection.commit()
@@ -245,7 +246,7 @@ class WorkspaceStateMixin:
         self.connection.execute("""INSERT INTO request_metrics(request_id, owner, channel, session_id, question,
             versions_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (key, self.owner, "teams" if self.owner.startswith("teams:") else "cli", session_id,
-             safe_text(question, 8000), json.dumps(dict(versions)), stamp, stamp))
+             safe_text(question, 8000), dumps_json(dict(versions)), stamp, stamp))
         self.connection.commit()
         self.active_request_id, self.active_turn_id = key, ""
         return key
@@ -263,7 +264,7 @@ class WorkspaceStateMixin:
             elapsed_seconds = ?, timings_json = ?, usage_json = ?, query_count = ?, bytes_processed = ?,
             error_type = ?, error_message = ?, updated_at = ? WHERE request_id = ? AND owner = ?""",
             (getattr(answer, "session_id", saved["session_id"]), turn_id, status, elapsed,
-             json.dumps(getattr(answer, "timings", json.loads(saved["timings_json"]))), json.dumps(getattr(answer, "usage", json.loads(saved["usage_json"]))),
+             dumps_json(getattr(answer, "timings", json.loads(saved["timings_json"]))), dumps_json(getattr(answer, "usage", json.loads(saved["usage_json"]))),
              getattr(answer, "query_count", saved["query_count"]), getattr(answer, "bytes_processed", saved["bytes_processed"]),
              type(error).__name__ if error else "", safe_text(error, 600) if error else "", now_utc(), request_id, self.owner))
         if turn_id and status in {"error", "failed"}:
@@ -273,7 +274,7 @@ class WorkspaceStateMixin:
     def snapshot_request(self, session_id: str, turn_id: str, timings: Mapping[str, Any], usage: Mapping[str, Any], queries: int, processed: int) -> None:
         self.connection.execute("""UPDATE request_metrics SET session_id = ?, turn_id = ?, timings_json = ?,
             usage_json = ?, query_count = ?, bytes_processed = ? WHERE request_id = ? AND owner = ?""",
-            (session_id, turn_id, json.dumps(dict(timings)), json.dumps(dict(usage)), queries, processed, self.active_request_id, self.owner))
+            (session_id, turn_id, dumps_json(dict(timings)), dumps_json(dict(usage)), queries, processed, self.active_request_id, self.owner))
         self.connection.commit()
 
     def record_query(self, sql: str, estimated_bytes: int | None, status: str, error: str = "", *, attempt_key: str = "") -> None:

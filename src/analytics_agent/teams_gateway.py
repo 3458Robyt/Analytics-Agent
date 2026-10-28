@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
 from .teams_common import csv_env, required_env, stable_request_id, value_at
+from .text_encoding import dumps_json, repair_payload
 
 LOGGER = logging.getLogger("analytics_agent.teams_gateway")
 _SAFE_ID = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
@@ -110,6 +111,7 @@ def _build_gateway():
     bot_app = App(http_server_adapter=FastAPIAdapter(app=http))
 
     async def publish_request(request_payload: dict[str, Any]) -> None:
+        request_payload = repair_payload(request_payload)
         doc = documents.document("requests").collection("items").document(request_payload["request_id"])
         request_payload["expires_at"] = datetime.now(timezone.utc) + timedelta(days=7)
         try:
@@ -120,7 +122,7 @@ def _build_gateway():
             pass
         key_source = f"{request_payload['tenant_id']}:{request_payload['user_id']}:{request_payload['conversation_id']}"
         ordering_key = hashlib.sha256(key_source.encode()).hexdigest()[:40]
-        data = json.dumps(
+        data = dumps_json(
             request_payload, ensure_ascii=False, separators=(",", ":"),
             default=lambda value: value.isoformat() if isinstance(value, datetime) else str(value),
         ).encode("utf-8")

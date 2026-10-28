@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .workspace_state import WorkspaceStateMixin
+from .text_encoding import TextConnection, dumps_json
 
 
 def _utc_now() -> str:
@@ -48,7 +49,7 @@ class SessionStore(WorkspaceStateMixin):
         except OSError:
             pass
         self.path = self.directory / "state.sqlite3"
-        self.connection = sqlite3.connect(self.path, timeout=30)
+        self.connection = sqlite3.connect(self.path, timeout=30, factory=TextConnection)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
         self.connection.execute("PRAGMA busy_timeout = 30000")
@@ -222,7 +223,7 @@ class SessionStore(WorkspaceStateMixin):
             """INSERT INTO learning_queue(turn_id, owner, payload_json, status, created_at, updated_at)
                VALUES (?, ?, ?, 'pending', ?, ?)
                ON CONFLICT(turn_id) DO NOTHING""",
-            (turn_id, self.owner, json.dumps(payload, ensure_ascii=False, default=str), now, now),
+            (turn_id, self.owner, dumps_json(payload, ensure_ascii=False, default=str), now, now),
         )
         self.connection.commit()
 
@@ -357,7 +358,7 @@ class SessionStore(WorkspaceStateMixin):
                VALUES (?, ?, ?, ?)
                ON CONFLICT(owner, table_id) DO UPDATE SET metadata_json = excluded.metadata_json,
                updated_at = excluded.updated_at""",
-            (self.owner, table_id.strip().lower(), json.dumps(metadata, ensure_ascii=False, default=str), _utc_now()),
+            (self.owner, table_id.strip().lower(), dumps_json(metadata, ensure_ascii=False, default=str), _utc_now()),
         )
         self.connection.commit()
 
@@ -383,7 +384,7 @@ class SessionStore(WorkspaceStateMixin):
         ).fetchone()
         if row is None:
             raise ValueError("El turno no pertenece a la sesión indicada")
-        rows_json = json.dumps(list(rows), ensure_ascii=False, default=str, separators=(",", ":"))
+        rows_json = dumps_json(list(rows), ensure_ascii=False, default=str, separators=(",", ":"))
         rows_blob = zlib.compress(rows_json.encode("utf-8"), level=1)
         now = _utc_now()
         self.connection.execute(
@@ -401,11 +402,11 @@ class SessionStore(WorkspaceStateMixin):
                 session_id,
                 turn_id,
                 question[:2000],
-                json.dumps(list(columns), ensure_ascii=False),
-                json.dumps(dict(column_types), ensure_ascii=False),
+                dumps_json(list(columns), ensure_ascii=False),
+                dumps_json(dict(column_types), ensure_ascii=False),
                 sqlite3.Binary(rows_blob),
                 sql,
-                json.dumps(list(tables), ensure_ascii=False),
+                dumps_json(list(tables), ensure_ascii=False),
                 len(rows),
                 now,
             ),
@@ -541,8 +542,8 @@ class SessionStore(WorkspaceStateMixin):
                 turn_id,
                 sequence,
                 action,
-                json.dumps(safe_request, ensure_ascii=False, default=str),
-                json.dumps(safe_result, ensure_ascii=False, default=str),
+                dumps_json(safe_request, ensure_ascii=False, default=str),
+                dumps_json(safe_result, ensure_ascii=False, default=str),
                 sql_text,
                 str(result.get("job_id", "") or ""),
                 _utc_now(),
@@ -560,7 +561,7 @@ class SessionStore(WorkspaceStateMixin):
     def set_pending_clarification(self, turn_id: str, clarification: Mapping[str, Any]) -> None:
         self.connection.execute(
             "UPDATE turns SET status = 'needs_clarification', pending_clarification_json = ? WHERE turn_id = ?",
-            (json.dumps(dict(clarification), ensure_ascii=False), turn_id),
+            (dumps_json(dict(clarification), ensure_ascii=False), turn_id),
         )
         self.connection.commit()
 
@@ -610,8 +611,8 @@ class SessionStore(WorkspaceStateMixin):
             "pending_clarification_json = 'null' WHERE turn_id = ?",
             (
                 answer,
-                json.dumps(list(assumptions), ensure_ascii=False),
-                json.dumps(summary_table, ensure_ascii=False, default=str),
+                dumps_json(list(assumptions), ensure_ascii=False),
+                dumps_json(summary_table, ensure_ascii=False, default=str),
                 turn_id,
             ),
         )
@@ -1043,4 +1044,4 @@ def load_glossary(question: str = "", *, limit: int = 12) -> tuple[str, list[dic
         ranked = [term for term in ranked if score(term) > 0][:limit]
     else:
         ranked = ranked[:limit]
-    return json.dumps(ranked, ensure_ascii=False, indent=2), ranked
+    return dumps_json(ranked, ensure_ascii=False, indent=2), ranked

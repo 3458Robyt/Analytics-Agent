@@ -9,6 +9,7 @@ from typing import Any, Mapping
 from datetime import datetime
 
 from .workspace_state import positive_env
+from .text_encoding import TextConnection, dumps_json
 
 
 def default_teams_state_path() -> Path:
@@ -32,7 +33,7 @@ class TeamsWorkerStore:
             self.path.parent.chmod(0o700)
         except OSError:
             pass
-        self.connection = sqlite3.connect(self.path, timeout=30)
+        self.connection = sqlite3.connect(self.path, timeout=30, factory=TextConnection)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA busy_timeout = 30000")
         self.connection.execute("PRAGMA journal_mode = WAL")
@@ -150,7 +151,7 @@ class TeamsWorkerStore:
     def complete_request(self, request_id: str, response: Mapping[str, Any]) -> None:
         self.connection.execute(
             "UPDATE teams_requests SET status = 'complete', response_json = ?, updated_at = ? WHERE request_id = ?",
-            (json.dumps(response, ensure_ascii=False, default=str), time.time(), request_id),
+            (dumps_json(response, ensure_ascii=False, default=str), time.time(), request_id),
         )
         self.connection.commit()
 
@@ -170,7 +171,7 @@ class TeamsWorkerStore:
             """INSERT INTO teams_results(result_id, owner, record_json, expires_at) VALUES (?, ?, ?, ?)
                ON CONFLICT(result_id, owner) DO UPDATE SET record_json = excluded.record_json,
                expires_at = excluded.expires_at""",
-            (result_id, owner, json.dumps(record, ensure_ascii=False, default=str), now + ttl_seconds),
+            (result_id, owner, dumps_json(record, ensure_ascii=False, default=str), now + ttl_seconds),
         )
         self.connection.commit()
 
@@ -231,7 +232,7 @@ class TeamsWorkerStore:
                            card=None, result_id="", cache_expired=True)
             self.connection.execute(
                 "UPDATE teams_requests SET response_json = ? WHERE request_id = ?",
-                (json.dumps(receipt, ensure_ascii=False), row["request_id"]),
+                (dumps_json(receipt, ensure_ascii=False), row["request_id"]),
             )
         self.connection.execute("DELETE FROM teams_feedback WHERE created_at < ?", (cutoff - positive_env("ANALYTICS_AGENT_HISTORY_RETENTION_DAYS", 90) * 86400,))
         self.connection.execute("DELETE FROM teams_conversations WHERE updated_at < ?", (cutoff - positive_env("ANALYTICS_AGENT_HISTORY_RETENTION_DAYS", 90) * 86400,))
