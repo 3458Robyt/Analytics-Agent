@@ -16,7 +16,7 @@ class LLMError(RuntimeError):
     """The configured model endpoint could not return a usable response."""
 
 
-AGENT_SYSTEM_PROMPT_VERSION = "v2.3"
+AGENT_SYSTEM_PROMPT_VERSION = "v2.4"
 
 
 def load_default_agent_system_prompt() -> str:

@@ -31,6 +31,7 @@ class AnalysisSpec:
     payment_date_basis: str = "accident"
     assumptions: tuple[str, ...] = ()
     as_of: str = ""
+    comparison_periods: tuple[tuple[str, str], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -158,6 +159,13 @@ BRANCH_CODE_FIELDS = {"codigo_ramo", "cod_ramo", "cod_ramo_com", "cod_ramo_tec",
                       "codigo_ramo_contable", "ramo_contable"}
 
 
+def removes_branch_filter(question: str) -> bool:
+    text = normalized(question)
+    return bool(re.search(
+        r"\b(?:(?:quita(?:r)?|elimina(?:r)?|retira(?:r)?|borra(?:r)?)\s+(?:el\s+)?filtro\s+(?:de(?:l)?\s+)?ramo"
+        r"|sin\s+(?:el\s+)?filtro\s+(?:de(?:l)?\s+)?ramo|todos\s+los\s+ramos)\b", text))
+
+
 def _branch_code_field(target: str) -> str:
     if "tecnico" in target or "cod_ramo_tec" in target:
         return "cod_ramo_tec"
@@ -203,7 +211,8 @@ def branch_scope_filter(question: str) -> dict[str, Any] | None:
         words = normalized(label).split()
         invalid = {"en", "para", "durante", "por", "del", "de", "y", "comercial", "tecnico", "contable",
                    "debes", "debe", "deberias", "usa", "usar", "uses", "utiliza", "utilizar", "no", "es", "son",
-                   "se", "que", "tiene", "nombre", "numero", "codigo", "campo", "el", "lo"}
+                   "se", "que", "tiene", "nombre", "numero", "codigo", "campo", "el", "lo", *MONTHS,
+                   "mes", "ano", "primer", "primera", "segundo", "segunda", "ultimo", "ultima"}
         if (not words or words[0] in invalid or not label[0].isalpha()
                 or any(word in invalid - {"de", "del", "y", "el", "comercial", "tecnico", "contable"} for word in words)
                 or re.search(r"\bcod_\w+", normalized(label))):
@@ -226,7 +235,7 @@ def resolve_analysis(action: Mapping[str, Any], question: str, *, today: date,
                      organization: OrganizationCatalog | None = None) -> AnalysisSpec:
     """Only explicit employee changes may replace a resolved population or period."""
     text = normalized(question)
-    followup = bool(re.search(r"^(?:[¿? ]*)(?:y\b|ahora\b|usa\b|haz el calculo\b|vuelve\b|esos\b|confirma\b|cambia\b|igual\b|por\b|con\b)", text))
+    followup = bool(re.search(r"^(?:[¿? ]*)(?:y\b|ahora\b|usa\b|haz el calculo\b|vuelve\b|esos\b|confirma\b|cambia\b|igual\b|por\b|con\b|compara|quita|elimina|retira|sin filtro)", text))
     active = dict(active or {})
     previous = active if followup or not requested_metrics(question) else {}
     requested = requested_metrics(question)
@@ -291,6 +300,10 @@ def resolve_analysis(action: Mapping[str, Any], question: str, *, today: date,
     match = re.search(r"\bpor\s+(area|areas|vp|vicepresidencia|linea mayor|linea menor|lob[ _]?l?[123]|sucursal|ramo(?: comercial)?)\b", text)
     if match:
         group = [dimension_name(match[1])]
+    elif re.search(r"\b(?:muestra|mostrar|desglosa|desglosar)\s+todos\s+los\s+ramos\b", text):
+        group = ["ramo"]
+    elif previous and re.search(r"\b(?:compara\w*|variacion)\b", text):
+        group = list(previous.get("group_by", ()))
     group = [dimension_name(str(value)) for value in group if value not in {"mes", "month"}]
     monthly = bool(re.search(r"\b(?:mes a mes|mensual(?:es)?|por mes|cada mes|ultimos?\s+(?:\d+|seis|tres|doce|dos)\s+meses)\b", text))
     grain = "month" if monthly or group_month else str(action.get("time_grain") or previous.get("time_grain", "total"))
@@ -339,5 +352,23 @@ def resolve_analysis(action: Mapping[str, Any], question: str, *, today: date,
     if re.search(r"\b(?:sin filtros|quita (?:los )?filtros)\b", text):
         filters = ()
         population = {}
+    if removes_branch_filter(question):
+        # Apply AFTER model filters and inheritance: empty model lists cannot
+        # express removal, and stale predicates must never resurrect the scope.
+        filters = tuple(item for item in filters if item.get("field") not in BRANCH_NAME_FIELDS | BRANCH_CODE_FIELDS)
+    comparison = ()
+    comparing = bool(re.search(r"\b(?:compara\w*|variacion)\b", text))
+    if comparing and "quincena" in text:
+        if not start:
+            raise MetricDefinitionError("Indica el mes y año de las quincenas que quieres comparar")
+        first = date.fromisoformat(start).replace(day=1)
+        # Never silently reinterpret a multi-month scope as one month.
+        if date.fromisoformat(end) > shift_month(first, 1):
+            raise MetricDefinitionError("La comparación de dos quincenas necesita un único mes; indica cuál")
+        middle, last = first.replace(day=16), shift_month(first, 1)
+        comparison = ((first.isoformat(), middle.isoformat()), (middle.isoformat(), last.isoformat()))
+        start, end, grain = first.isoformat(), last.isoformat(), "total"
+    elif previous.get("comparison_periods") and period is None and not monthly:
+        comparison = tuple(tuple(item) for item in previous["comparison_periods"])
     return AnalysisSpec(keys, start, end, grain, tuple(dict.fromkeys(group)), filters,
-                        population or {}, basis, notes, today.isoformat())
+                        population or {}, basis, notes, today.isoformat(), comparison)

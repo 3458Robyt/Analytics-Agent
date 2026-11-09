@@ -48,6 +48,10 @@ El grafo local relaciona métricas, componentes, función, códigos y jerarquía
 
 ## Contrastar en Workbench
 
+La comparación de ambas quincenas del mes activo usa dos intervalos independientes: días 1–15 y 16–último día del mes. Conserva métricas, filtros y desglose (por ejemplo, sucursal), y muestra los dos importes, diferencia y variación `(segunda − primera) / primera × 100`. La base cero o ausente deja el porcentaje no calculable. Un grupo presente en una sola quincena sigue apareciendo, sin convertir la ausencia en cero.
+
+«Quita el filtro de ramo» elimina los predicados de código y nombre aun si el modelo los vuelve a proponer. Mantiene fechas y otros filtros. «Muestra todos los ramos» también cambia el desglose a ramo; si estaba activa la comparación de quincenas, la conserva. Un nuevo periodo explícito inicia un análisis sin la comparación anterior.
+
 Actualiza el clon e instala desde la terminal del runtime:
 
 ```bash
@@ -66,6 +70,12 @@ Vuelve a intentarlo
 /new
 Pagos, prima emitida, prima devengada y siniestralidad de Copropiedades de los últimos seis meses
 Exporta el resultado a Excel
+/new
+Cuánto fueron las ventas del ramo 201 del 1 al 15 de octubre de 2026?
+Ahora desglósalo por sucursal
+Y del 16 al 31 de octubre del mismo año?
+Compara ambas quincenas e indica la variación porcentual
+Quita el filtro de ramo y muestra todos los ramos
 ```
 
 Comprueba que la primera consulta use código local 34 en primas y el alcance equivalente comprobado en siniestros; que el seguimiento solo cambie la base temporal de pagos; y que el reintento mantenga fechas y población. Contrasta importes con una consulta de referencia revisada por negocio y comprueba la firma de la UDF disponible en tu runtime.

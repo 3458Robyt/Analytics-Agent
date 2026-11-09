@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any, Mapping
 
@@ -147,6 +147,9 @@ def compile_analysis(spec: AnalysisSpec, definitions: Mapping[str, Mapping[str, 
                      routine_metadata: Mapping[str, Any] | None = None,
                      unavailable: Mapping[str, str] | None = None) -> CompiledAnalysis:
     """Every component is aggregated independently, then joined on common dimensions."""
+    if spec.comparison_periods:
+        return _compile_comparison(spec, definitions, tables=tables, timezone=timezone,
+                                   routine_metadata=routine_metadata, unavailable=unavailable)
     if not re.fullmatch(r"[A-Za-z0-9_+./-]+", timezone):
         raise MetricDefinitionError("Zona horaria inválida")
     for key in spec.metric_keys:
@@ -278,3 +281,38 @@ def compile_analysis(spec: AnalysisSpec, definitions: Mapping[str, Mapping[str, 
     if key_columns:
         sql += " ORDER BY " + ", ".join(f"k.`{column}`" for column in key_columns)
     return CompiledAnalysis(MetricQuery(sql, tuple(parameters)), spec, tuple(available), requested, tuple(issues))
+
+
+def _compile_comparison(spec: AnalysisSpec, definitions, **kwargs) -> CompiledAnalysis:
+    """Compare independently calculated periods on identical dimensions and scope."""
+    if len(spec.comparison_periods) != 2:
+        raise MetricDefinitionError("La comparación requiere exactamente dos periodos")
+    queries, parameters, compiled = [], [], []
+    for index, (start, end) in enumerate(spec.comparison_periods):
+        part = compile_analysis(replace(spec, start_date=start, end_date=end, time_grain="total",
+                                        comparison_periods=()), definitions, **kwargs)
+        compiled.append(part)
+        prefix = f"p{index}_"
+        queries.append(re.sub(r"@(\w+)", lambda match: "@" + prefix + match[1], part.query.sql))
+        parameters.extend({**item, "name": prefix + item["name"]} for item in part.query.parameters)
+    group = tuple(dict.fromkeys(_dimension(item) for item in spec.group_by))
+    keys = ", ".join(f"`{item}`" for item in group)
+    key_query = f"SELECT {keys} FROM previous UNION DISTINCT SELECT {keys} FROM current" if group else "SELECT 1 AS __one"
+    projections = [f"k.`{item}`" for item in group]
+    for key in spec.metric_keys:
+        before, after = f"b.`{key}`", f"c.`{key}`"
+        projections.extend((f"{before} AS `{key}_base`", f"{after} AS `{key}_actual`",
+                            f"({after} - {before}) AS `{key}_diferencia`",
+                            f"SAFE_DIVIDE({after} - {before}, {before}) * 100 AS `{key}_variacion_pct`"))
+    joins = []
+    for alias, source in (("b", "previous"), ("c", "current")):
+        condition = " AND ".join(f"k.`{item}` IS NOT DISTINCT FROM {alias}.`{item}`" for item in group) or "TRUE"
+        joins.append(f"LEFT JOIN {source} {alias} ON {condition}")
+    sql = (f"WITH previous AS ({queries[0]}), current AS ({queries[1]}), comparison_keys AS ({key_query}) "
+           + "SELECT " + ", ".join(projections) + " FROM comparison_keys k " + " ".join(joins))
+    if group:
+        sql += " ORDER BY " + ", ".join(f"k.`{item}`" for item in group)
+    issues = tuple(dict.fromkeys(issue for part in compiled for issue in part.unavailable))
+    return CompiledAnalysis(MetricQuery(sql, tuple(parameters)), spec,
+                            tuple(key for key in compiled[0].components if key in compiled[1].components),
+                            spec.metric_keys, issues)

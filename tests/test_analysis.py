@@ -16,7 +16,7 @@ import sqlglot
 from openpyxl import Workbook, load_workbook
 
 from analytics_agent.agent import AnalyticsAgent
-from analytics_agent.analysis_context import AnalysisSpec, period_from_text, requested_metrics, resolve_analysis
+from analytics_agent.analysis_context import AnalysisSpec, period_from_text, requested_metrics, resolve_analysis, branch_scope_filter
 from analytics_agent.analysis_sql import ROUTINE_ID, compile_analysis, routine_roles
 from analytics_agent.bigquery_adapter import BigQueryError, DryRunResult, QueryPage
 from analytics_agent.llm import Completion, OpenAICompatibleProvider
@@ -157,6 +157,112 @@ class AnalysisTests(unittest.TestCase):
         llm = DirectLLM(actions)
         return AnalyticsAgent(catalog=SchemaCatalog({}), llm=llm, bigquery=self.oracle,
                               settings=AgentSettings("https://example", "model", "secret", bigquery_location="us-east1", **settings)), llm
+
+    def october_fixture(self):
+        self.oracle.db.execute("ALTER TABLE premiums ADD COLUMN cod_ramo_com INTEGER")
+        self.oracle.db.execute("ALTER TABLE premiums ADD COLUMN nombre_sucursal TEXT")
+        self.oracle.columns[PREMIUMS].update(cod_ramo_com="INTEGER", nombre_sucursal="STRING")
+        self.oracle.db.execute("DELETE FROM premiums")
+        self.oracle.db.executemany(
+            "INSERT INTO premiums(fecha_emision,vrprima,cod_ramo_com,nombre_ramo_comercial,nombre_sucursal) VALUES(?,?,?,?,?)", [
+                ("2026-10-01", 100, 201, "Ramo A", "A"),
+                ("2026-10-16", 150, 201, "Ramo A", "A"),
+                ("2026-10-31", 20, 201, "Ramo A", "B"),
+                ("2026-10-15", 0, 201, "Ramo A", "C"),
+                ("2026-10-20", 10, 201, "Ramo A", "C"),
+                ("2026-10-15", 40, 201, "Ramo A", "D"),
+                ("2026-10-01", 400, 202, "Ramo B", "A"),
+                ("2026-10-31", 800, 202, "Ramo B", "A"),
+                ("2026-11-01", 9999, 201, "Ramo A", "A"),
+            ])
+
+    def test_transcript_quincenas_and_filter_removal_end_to_end(self):
+        self.october_fixture()
+        questions = [
+            "Cuánto fueron las ventas del ramo 201 del 1 al 15 de octubre de 2026?",
+            "Y las de todo octubre?",
+            "El 201 es el código del ramo; usa el código, no el nombre.",
+            "Ahora desglósalo por sucursal.",
+            "Y del 16 al 31 de octubre del mismo año?",
+            "Compara ambas quincenas e indica la variación porcentual.",
+            "Y la comparacion por cada quincena y su variacion?",
+            "Quiero que comparares las dos quincenas de octubre",
+            "Quita el filtro de ramo y muestra todos los ramos.",
+        ]
+        # Deliberately stale model predicates must be removed by user edits.
+        actions = [action("run_metric", metric_key="prima_emitida", filters=[
+            {"field": "cod_ramo_com", "operator": "eq", "value": 201}]) for _ in questions]
+        with tempfile.TemporaryDirectory() as folder, SessionStore(folder) as store:
+            agent, llm = self.agent(actions)
+            session = store.create_session()
+            answers = [agent.answer(q, session_store=store, session_id=session) for q in questions]
+            self.assertEqual(140, answers[0].summary_table.rows[0]["prima_emitida"])
+            self.assertEqual(320, answers[1].summary_table.rows[0]["prima_emitida"])
+            for answer in answers[5:8]:
+                rows = {row["sucursal"]: row for row in answer.summary_table.rows}
+                self.assertEqual((100, 150, 50, 50), tuple(rows["A"]["prima_emitida_" + suffix]
+                    for suffix in ("base", "actual", "diferencia", "variacion_pct")))
+                self.assertIsNone(rows["B"]["prima_emitida_base"])
+                self.assertIsNone(rows["B"]["prima_emitida_variacion_pct"])
+                self.assertIsNone(rows["C"]["prima_emitida_variacion_pct"])
+                self.assertIsNone(rows["D"]["prima_emitida_actual"])
+                self.assertIn("2026-10-01 a 2026-10-15", answer.answer)
+                self.assertIn("2026-10-16 a 2026-10-31", answer.answer)
+            last = answers[-1]
+            rows = {row["ramo"]: row for row in last.summary_table.rows}
+            self.assertEqual({"Ramo A", "Ramo B"}, set(rows))
+            self.assertEqual(400, rows["Ramo B"]["prima_emitida_base"])
+            self.assertEqual(800, rows["Ramo B"]["prima_emitida_actual"])
+            self.assertEqual([], store.get_analysis_state(session)["filters"])
+            self.assertEqual((), self.oracle.executed[-1][1])
+            self.assertEqual(len(questions), len(llm.calls))
+
+    def test_removing_branch_preserves_other_filters_and_dates(self):
+        previous = AnalysisSpec(("prima_emitida",), "2026-10-16", "2026-11-01", group_by=("sucursal",),
+            filters=({"field": "codigo_ramo", "operator": "eq", "value": 201},
+                     {"field": "sucursal", "operator": "eq", "value": "Cali"})).to_dict()
+        for question in ("Quita el filtro de ramo", "Sin filtro de ramo", "Elimina el filtro del ramo", "Incluye todos los ramos"):
+            spec = resolve_analysis({"filters": list(previous["filters"])}, question, today=TODAY, active=previous)
+            self.assertEqual((previous["filters"][1],), spec.filters)
+            self.assertEqual(("2026-10-16", "2026-11-01"), (spec.start_date, spec.end_date))
+            self.assertEqual(("sucursal",), spec.group_by)
+
+    def test_quincenas_february_and_explicit_new_period_clear_comparison(self):
+        previous = AnalysisSpec(("prima_emitida",), "2024-02-16", "2024-03-01").to_dict()
+        spec = resolve_analysis({}, "Compara ambas quincenas", today=TODAY, active=previous)
+        self.assertEqual((("2024-02-01", "2024-02-16"), ("2024-02-16", "2024-03-01")), spec.comparison_periods)
+        new = resolve_analysis({}, "Y marzo de 2024?", today=TODAY, active=spec.to_dict())
+        self.assertEqual((), new.comparison_periods)
+
+    def test_scalar_comparison_summary_has_both_periods_and_variation(self):
+        self.october_fixture()
+        spec = resolve_analysis({}, "Compara ambas quincenas", today=TODAY,
+            active=AnalysisSpec(("prima_emitida",), "2026-10-16", "2026-11-01").to_dict())
+        compiled = compile_analysis(spec, self.rules, tables=self.oracle.tables(), timezone="America/Bogota")
+        rows = self.run_compiled(compiled)
+        self.assertEqual(540, rows[0]["prima_emitida_base"])
+        self.assertEqual(980, rows[0]["prima_emitida_actual"])
+        self.assertAlmostEqual(440 / 540 * 100, rows[0]["prima_emitida_variacion_pct"])
+        answer, table, notes = analysis_presentation({"rows": rows, "columns": tuple(rows[0])}, compiled)
+        self.assertIn("540,00", answer)
+        self.assertIn("980,00", answer)
+        self.assertIn("81,48 %", answer)
+        self.assertEqual("percent", table.column_formats["prima_emitida_variacion_pct"])
+
+    def test_numeric_branch_correction_never_creates_name_filter(self):
+        first = resolve_analysis({"metric_key": "prima_emitida"},
+            "Cuánto fueron las ventas para el ramo 201 del 1 al 15 de octubre", today=TODAY)
+        previous = first.to_dict()
+        previous["filters"] = [*previous["filters"], {"field": "nombre_ramo_comercial", "operator": "eq", "value": "201"}]
+        corrected = resolve_analysis({}, "Pero si te dije el numero del ramo debes usar el cod_ramo, no el nombre",
+                                     today=TODAY, active=previous)
+        self.assertEqual(({"field": "codigo_ramo", "operator": "eq", "value": "201"},), corrected.filters)
+        self.assertEqual((first.start_date, first.end_date), (corrected.start_date, corrected.end_date))
+
+    def test_branch_grouping_followed_by_date_is_not_a_branch_name(self):
+        for question in ("Pagos por ramo de septiembre", "Primas por ramo de octubre de 2026",
+                         "Desglosa por ramo del primer semestre"):
+            self.assertIsNone(branch_scope_filter(question))
 
     def test_independent_sources_earned_includes_policies_issued_before_period(self):
         compiled = self.compile("Pagos, prima emitida, prima devengada y siniestralidad de Copropiedades en septiembre de 2026")
