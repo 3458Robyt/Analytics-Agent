@@ -2,6 +2,8 @@
 
 Agente de análisis en Python para consultar BigQuery en lenguaje natural. Incluye una CLI para ejecutar preguntas desde una terminal; no requiere un notebook.
 
+LangGraph es el motor predeterminado de `ask`, `chat` y del worker de Teams. Guarda el avance en SQLite para recuperar una ejecución interrumpida desde la misma cuenta y carpeta de estado. Conserva el proveedor Responses, las herramientas y las reglas de negocio existentes. La [guía de LangGraph](docs/LANGGRAPH_PILOTO.md) explica actualización, recuperación, pruebas y límites del almacenamiento local.
+
 El agente descubre tablas visibles en los proyectos configurados, usa el esquema actual de BigQuery y toma del Excel solo las descripciones que coinciden exactamente con una columna vigente. Genera y ejecuta consultas de solo lectura, procesa todas las páginas y presenta los resultados en tablas con formato numérico español. Las respuestas del proveedor se solicitan con `store=false` de forma predeterminada.
 
 Para reducir latencia, las métricas con una definición confirmada se compilan en Python y no requieren una llamada adicional de revisión del modelo. Para consultas exploratorias se usa el dry run de BigQuery para validar columnas y tipos; cuando falta una decisión de negocio que cambie materialmente la cifra, el agente pregunta dentro de la misma ejecución. Las respuestas y tablas provienen de las filas leídas desde BigQuery; el modelo no puede reemplazarlas por cifras redactadas.
@@ -105,9 +107,17 @@ analytics-agent evaluate --candidate-prompt /ruta/al/prompt-candidato.txt
 
 # Reanuda una conversación en la CLI
 analytics-agent chat --resume ID_SESION
+
+# Inspecciona o recupera una ejecución interrumpida, incluso tras cerrar la terminal
+analytics-agent runs list
+analytics-agent runs show ID_EJECUCION
+analytics-agent runs resume ID_EJECUCION
+
+# Alternativa explícita para diagnosticar diferencias con el motor anterior
+analytics-agent chat --engine legacy
 ```
 
-Dentro del chat puedes usar `/feedback comentario`, `/new`, `/sessions`, `/resume ID` y `/history ID`. El feedback y la navegación se procesan en Python, sin consumir tokens ni consultar BigQuery. El operador puede revisar comentarios con `analytics-agent feedback list`, y tiempos, errores y patrones recurrentes con `analytics-agent usage report`. La guía de estas funciones está en [docs/FEEDBACK_MEMORY.md](docs/FEEDBACK_MEMORY.md).
+Dentro del chat puedes usar `/feedback comentario`, `/new`, `/sessions`, `/resume ID`, `/history ID`, `/runs` y `/retry ID_EJECUCION`. `/retry` sin identificador recupera la última ejecución de la sesión. El feedback y la navegación se procesan en Python, sin consumir tokens ni consultar BigQuery; recuperar una ejecución pendiente sí puede continuar consultas y llamadas al modelo. El operador puede revisar comentarios con `analytics-agent feedback list`, y tiempos, errores y patrones recurrentes con `analytics-agent usage report`. La guía de estas funciones está en [docs/FEEDBACK_MEMORY.md](docs/FEEDBACK_MEMORY.md).
 
 Si no indicas fechas y no hay un periodo reciente en la conversación, el agente estima la consulta mediante un dry run. Si supera **1 GiB** o no se puede estimar su volumen, pide un periodo antes de ejecutarla. Puedes responder con fechas o con «todo el histórico». Las consultas pequeñas continúan sin esta pregunta; las reglas de pagos y reservas siguen aplicándose.
 

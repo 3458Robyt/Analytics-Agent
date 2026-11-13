@@ -5,7 +5,7 @@ from datetime import date
 from decimal import Decimal
 from unittest.mock import patch
 
-from analytics_agent.bigquery_adapter import BigQueryAdapter, _to_json_value, bigquery_request_scope
+from analytics_agent.bigquery_adapter import BigQueryAdapter, BigQueryError, _to_json_value, bigquery_request_scope, stable_query_job_id
 
 
 class FakePage(list):
@@ -37,6 +37,44 @@ class FakeJob:
 
 
 class BigQueryAdapterTests(unittest.TestCase):
+    def test_resume_existing_job_from_offset_without_submitting_another_query(self):
+        expected_id = stable_query_job_id("run-1", "SELECT value FROM t", [{"name": "p", "value": 1, "type": "INT64"}])
+        calls = []
+        class Job(FakeJob):
+            query = "SELECT value FROM t"
+            job_id = expected_id
+            project = "billing-project"
+            location = "us-east1"
+            def result(self, *, page_size, start_index):
+                calls.append((page_size, start_index))
+                return FakeIterator()
+        class Client:
+            def get_job(self, job_id, *, project, location):
+                self.asserted = (job_id, project, location)
+                return Job()
+            def query(self, *args, **kwargs):
+                raise AssertionError("La recuperación no debe crear otro trabajo")
+        client = Client()
+        adapter = BigQueryAdapter(client, page_size=10)
+        page = adapter.resume_query("run-1", "SELECT value FROM t", project="billing-project", location="us-east1",
+                                    parameters=[{"type": "INT64", "value": 1, "name": "p"}], start_index=5,
+                                    query_id="persisted-result")
+        self.assertEqual((expected_id, "billing-project", "us-east1"), client.asserted)
+        self.assertEqual([(10, 5)], calls)
+        self.assertEqual("persisted-result", page.query_id)
+        self.assertEqual(({"value": "2026-01-01"},), adapter.read_page(page.query_id).rows)
+        self.assertNotEqual(expected_id, stable_query_job_id("run-1", "SELECT value FROM t", [{"name": "p", "value": 2, "type": "INT64"}]))
+
+    def test_resume_rejects_wrong_job_and_invalid_scope(self):
+        client = types.SimpleNamespace(get_job=lambda *a, **kw: types.SimpleNamespace(query="SELECT another"))
+        adapter = BigQueryAdapter(client)
+        with self.assertRaisesRegex(BigQueryError, "otra consulta"):
+            adapter.resume_query("run-1", "SELECT value", project="p", location="us-east1")
+        with self.assertRaises(ValueError):
+            adapter.resume_query("run-1", "SELECT value", project="p", location="us-east1", start_index=-1)
+        with self.assertRaises(ValueError):
+            stable_query_job_id("", "SELECT value")
+
     def test_routine_metadata_preserves_argument_order_and_remote_indicator(self):
         raw = {"routineType": "SCALAR_FUNCTION", "language": "SQL",
                "arguments": [{"name": "finvigencia", "dataType": {"typeKind": "DATE"}},

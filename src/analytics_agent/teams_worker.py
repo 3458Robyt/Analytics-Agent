@@ -376,7 +376,7 @@ class TeamsRequestProcessor:
                 command = handle_command(sessions, conversation["session_id"], text, channel="teams", request_id=str(request["request_id"]))
             except ValueError as exc:
                 return _response(request, text=str(exc))
-            if command is not None:
+            if command is not None and not text.lower().startswith("/retry"):
                 if command.changed or command.kind == "cancel":
                     self.store.save_conversation(owner, conversation_id, session_id=command.session_id,
                         pending_turn_id=sessions.pending_turn(command.session_id))
@@ -395,13 +395,22 @@ class TeamsRequestProcessor:
         session_id = conversation["session_id"]
         pending_turn_id = conversation["pending_turn_id"]
         with bigquery_request_scope(str(request["request_id"])), SessionStore(self.store.path.parent, owner=owner) as session_store:
-            answer = self.agent.answer(
-                text,
-                session_store=session_store,
-                session_id=session_id,
-                pending_turn_id=pending_turn_id,
-                clarification_response=text if pending_turn_id else "",
-            )
+            if text.lower() == "/retry" or text.lower().startswith("/retry "):
+                from .execution_store import ExecutionStore
+                with ExecutionStore(session_store.directory, owner=owner) as runs:
+                    records = runs.list(session_id=session_id)
+                run_id = text.split(maxsplit=1)[1] if " " in text else (records[0]['run_id'] if records else '')
+                if not run_id:
+                    return _response(request, text="No hay una ejecución para recuperar.")
+                answer = self.agent.resume(run_id, session_store=session_store)
+            else:
+                answer = self.agent.answer(
+                    text,
+                    session_store=session_store,
+                    session_id=session_id,
+                    pending_turn_id=pending_turn_id,
+                    clarification_response=text if pending_turn_id else "",
+                )
             if answer.session_id and session_store.session_exists(answer.session_id):
                 session_store.link_result(str(request["request_id"]), answer.session_id, answer.turn_id)
         if answer.learning_updates and self.runtime_config is not None:

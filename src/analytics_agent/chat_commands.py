@@ -62,10 +62,15 @@ def handle_command(store: Any, session_id: str, text: str, *, channel: str,
             key = store.add_feedback(argument, channel=channel, session_id=session_id,
                                      turn_id=store.latest_turn(session_id), external_key=request_id or None)
             result = CommandResult(f"Feedback registrado: {key}. Gracias por ayudarnos a mejorar.", session_id)
+    elif command == '/runs':
+        from .execution_store import ExecutionStore
+        with ExecutionStore(store.directory, owner=store.owner) as executions:
+            records = executions.list(session_id=session_id)
+        result = CommandResult(json.dumps(records, ensure_ascii=False), session_id)
     elif command == "/cancel":
         result = CommandResult("Captura de feedback cancelada. Puedes continuar tu consulta.", session_id, "cancel")
     elif command == "/help":
-        result = CommandResult("/new · /sessions [página] · /resume ID · /history ID [página] · /feedback comentario · /cancel", session_id)
+        result = CommandResult("/new · /sessions [página] · /resume ID · /history ID [página] · /feedback comentario · /runs · /retry [ID] · /cancel", session_id)
     else:
         return CommandResult("Comando desconocido. Usa /help para ver los comandos disponibles.", session_id)
     if request_id and command in {"/new", "/clear", "/nueva", "/resume", "/feedback"}:
