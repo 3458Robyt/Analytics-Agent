@@ -1,13 +1,52 @@
 import unittest
+import os
+import tempfile
+from contextlib import redirect_stdout
 from io import StringIO
+from unittest.mock import patch
 
 from rich.console import Console
 
-from analytics_agent.cli import _as_bool, _build_parser, _format_cell, _render_answer
+from analytics_agent.cli import _as_bool, _build_parser, _format_cell, _render_answer, main
+from analytics_agent.memory import SessionStore
+from analytics_agent.execution_store import ExecutionStore
 from analytics_agent.models import AgentAnswer, SummaryTable
 
 
 class CliFormattingTests(unittest.TestCase):
+    def test_runs_can_be_inspected_and_abandoned_without_provider_credentials(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with SessionStore(folder) as memory:
+                session = memory.create_session('Pregunta')
+                turn = memory.begin_turn(session, 'Pregunta')
+                owner = memory.owner
+            with ExecutionStore(folder, owner=owner) as executions:
+                run = executions.create(session_id=session, turn_id=turn, versions={})
+            with patch.dict(os.environ, {'ANALYTICS_AGENT_STATE_DIR': folder}, clear=True), redirect_stdout(StringIO()):
+                for args in (['list'], ['show', run], ['abandon', run]):
+                    self.assertEqual(0, main(['runs', *args]))
+            with ExecutionStore(folder, owner=owner) as executions:
+                self.assertEqual('failed', executions.get(run)['status'])
+            with SessionStore(folder) as memory:
+                self.assertEqual('', memory.pending_turn(session))
+
+    def test_engine_selection_and_execution_commands(self):
+        args = _build_parser().parse_args(['ask', '--engine', 'langgraph', 'Hola'])
+        self.assertEqual('langgraph', args.engine)
+        args = _build_parser().parse_args(['chat', '--engine', 'legacy'])
+        self.assertEqual('legacy', args.engine)
+        for command in ('show', 'resume', 'abandon'):
+            args = _build_parser().parse_args(['runs', command, 'run-1'])
+            self.assertEqual(command, args.run_action)
+            self.assertEqual('run-1', args.run_id)
+
+    def test_execution_id_is_visible_only_in_audit(self):
+        answer = AgentAnswer('Resultado', run_id='run-1', engine='langgraph')
+        for presentation in ('audit', 'business'):
+            console = Console(record=True, file=StringIO(), width=100)
+            _render_answer(answer, console, presentation)
+            self.assertEqual(presentation == 'audit', 'run-1' in console.export_text())
+
     def test_boolean_configuration(self):
         self.assertTrue(_as_bool("true"))
         self.assertTrue(_as_bool("sí"))

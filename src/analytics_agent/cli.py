@@ -357,6 +357,8 @@ def _render_answer(answer: AgentAnswer, console: Console, presentation: str = "a
         stats.append(f"Bytes procesados: {answer.bytes_processed:,}")
     if answer.session_id:
         stats.append("Sesión: " + answer.session_id)
+    if answer.run_id:
+        stats.append("Ejecución: " + answer.run_id)
     if stats and presentation == "audit":
         console.print("[dim]" + " · ".join(stats) + "[/dim]", highlight=False)
     if answer.query_jobs and presentation == "audit":
@@ -421,6 +423,9 @@ def _run_doctor(config: RuntimeConfig, console: Console) -> int:
     details = Table(title="Diagnóstico", header_style="bold cyan")
     details.add_column("Componente")
     details.add_column("Estado")
+    details.add_row("Motor", config.settings.engine)
+    from .memory import default_state_dir
+    details.add_row("Estado local", str(Path(config.state_dir).expanduser() if config.state_dir else default_state_dir()))
     details.add_row("Modelo", f"Configurado · {config.settings.llm_model}")
     details.add_row("Proyecto de ejecución", config.settings.bigquery_project)
     details.add_row("Proyectos revisados", str(len(report["projects"])))
@@ -503,6 +508,18 @@ def _run_chat(
             if not question:
                 continue
             try:
+                if command == "/retry" or command.startswith("/retry "):
+                    from .execution_store import ExecutionStore
+                    with ExecutionStore(store.directory, owner=store.owner) as runs:
+                        candidates = runs.list(session_id=session_id)
+                    run_id = question.split(maxsplit=1)[1] if " " in question else (candidates[0]["run_id"] if candidates else "")
+                    if not run_id:
+                        raise ValueError("No hay una ejecución para recuperar")
+                    answer = agent.resume(run_id, session_store=store,
+                        on_progress=lambda text: progress.print(text, markup=False),
+                        on_clarification=lambda request: _read_clarification(request, console))
+                    _render_answer(answer, console, selected_presentation)
+                    continue
                 result = handle_command(store, session_id, question, channel="cli")
                 if result is not None:
                     session_id = result.session_id
@@ -526,7 +543,7 @@ def _run_chat(
                         daemon=True,
                     )
                     worker.start()
-            except (BigQueryError, LLMError, ValueError) as exc:
+            except (BigQueryError, LLMError, RuntimeError, ValueError) as exc:
                 console.print(f"[red]No se pudo responder:[/red] {exc}", highlight=False)
 
 
@@ -761,12 +778,19 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="analytics-agent", description="Consulta BigQuery en lenguaje natural.")
     parser.add_argument("--env-file", default=".env", help="Archivo local de configuración (por defecto: .env).")
     commands = parser.add_subparsers(dest="command", required=True)
+    runs = commands.add_parser("runs", help="Consulta o recupera ejecuciones del grafo.")
+    run_actions = runs.add_subparsers(dest="run_action", required=True)
+    run_actions.add_parser("list")
+    for verb in ("show", "resume", "abandon"):
+        run_actions.add_parser(verb).add_argument("run_id")
     commands.add_parser("doctor", help="Revisa configuración y acceso a metadatos; no ejecuta SQL.")
     ask = commands.add_parser("ask", help="Responde una pregunta y ejecuta las consultas necesarias.")
+    ask.add_argument("--engine", choices=("langgraph", "legacy"), default="")
     ask.add_argument("question", nargs="+", help="Pregunta de negocio.")
     ask.add_argument("--presentation", choices=("audit", "business"), default="",
                      help="Presentación de la respuesta (por defecto: ANALYTICS_AGENT_PRESENTATION o audit).")
     chat = commands.add_parser("chat", help="Abre una conversación persistente en la terminal.")
+    chat.add_argument("--engine", choices=("langgraph", "legacy"), default="")
     chat.add_argument("--resume", help="Continúa una sesión guardada por su identificador.")
     chat.add_argument("--presentation", choices=("audit", "business"), default="",
                       help="Presentación predeterminada en esta conversación.")
@@ -845,6 +869,37 @@ def main(argv: Sequence[str] | None = None) -> int:
             load_dotenv(env_file, override=False)
         elif args.env_file != ".env":
             raise FileNotFoundError(f"No existe el archivo de configuración: {env_file}")
+        if getattr(args, "engine", ""):
+            os.environ["ANALYTICS_AGENT_ENGINE"] = args.engine
+        if args.command == "runs":
+            from .execution_store import ExecutionStore
+            with SessionStore(os.environ.get("ANALYTICS_AGENT_STATE_DIR", "") or None) as memory:
+                with ExecutionStore(memory.directory, owner=memory.owner) as runs:
+                    if args.run_action == "list":
+                        console.print_json(json.dumps(runs.list()))
+                        return 0
+                    record = runs.get(args.run_id)
+                    if record is None:
+                        raise ValueError("La ejecución no pertenece a esta cuenta")
+                    if args.run_action == "show":
+                        console.print_json(json.dumps(record))
+                        return 0
+                    if args.run_action == "abandon":
+                        import uuid
+                        token = uuid.uuid4().hex
+                        if not runs.acquire(args.run_id, token):
+                            raise ValueError("La ejecución está activa o ya terminó")
+                        runs.update(args.run_id, token, status="failed", stage="abandoned")
+                        runs.release(args.run_id, token)
+                        memory.complete_turn(record['turn_id'], 'Ejecución abandonada por el usuario.', status='partial')
+                        console.print("Ejecución abandonada.")
+                        return 0
+                agent, _ = _build_agent(RuntimeConfig.from_env(), console)
+                answer = agent.resume(args.run_id, session_store=memory,
+                    on_progress=lambda text: progress.print(text, markup=False),
+                    on_clarification=lambda request: _read_clarification(request, console))
+                _render_answer(answer, console)
+                return 0
         if args.command == "doctor":
             config = RuntimeConfig.from_env()
             return _run_doctor(config, console)

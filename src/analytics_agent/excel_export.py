@@ -72,6 +72,7 @@ def export_results_to_excel(
     title: str,
     export_dir: str | Path,
     timezone_name: str = "America/Bogota",
+    export_key: str = "",
 ) -> Path:
     """Write one or more previously-read query results to a local .xlsx file."""
     if not results:
@@ -86,6 +87,11 @@ def export_results_to_excel(
         pass
     stem = re.sub(r"[^A-Za-z0-9_-]+", "_", title.strip()).strip("_")[:48] or "resultados"
     path = directory / f"{exported_at:%Y%m%d_%H%M%S}_{stem}_{uuid4().hex[:8]}.xlsx"
+    if export_key:
+        import hashlib
+        path = directory / ('export_' + hashlib.sha256(export_key.encode()).hexdigest() + '.xlsx')
+        if path.is_file():
+            return path
 
     workbook = Workbook(write_only=True)
     workbook.properties.title = title[:255]
@@ -164,7 +170,13 @@ def export_results_to_excel(
                 continue
             sheet.append([_cell_value(sheet, row.get(column), str(types.get(column, ""))) for column in columns])
 
-    workbook.save(path)
+    temporary = path.with_name(path.name + '.' + uuid4().hex + '.tmp')
+    try:
+        workbook.save(temporary)
+        temporary.replace(path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
     try:
         path.chmod(0o600)
     except OSError:

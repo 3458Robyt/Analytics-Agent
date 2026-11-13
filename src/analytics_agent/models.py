@@ -28,6 +28,7 @@ class AgentSettings:
     export_dir: str = "./exports"
     evidence_max_chars: int = 40_000
     unscoped_query_threshold_bytes: int = 1_073_741_824
+    engine: str = "langgraph"
 
     @classmethod
     def from_env(cls) -> "AgentSettings":
@@ -54,6 +55,9 @@ class AgentSettings:
         if evidence_max_chars < 1000:
             raise ValueError("ANALYTICS_AGENT_EVIDENCE_MAX_CHARS debe ser al menos 1000")
         from .workspace_state import positive_env
+        engine = os.environ.get("ANALYTICS_AGENT_ENGINE", "langgraph").strip().lower()
+        if engine not in {"langgraph", "legacy"}:
+            raise ValueError("ANALYTICS_AGENT_ENGINE debe ser langgraph o legacy")
         return cls(
             llm_base_url=base_url,
             llm_model=model,
@@ -64,6 +68,7 @@ class AgentSettings:
             export_dir=export_dir,
             evidence_max_chars=evidence_max_chars,
             unscoped_query_threshold_bytes=positive_env("BQ_UNSCOPED_QUERY_THRESHOLD_BYTES", 1_073_741_824),
+            engine=engine,
         )
 
 
@@ -105,3 +110,5 @@ class AgentAnswer:
     timings: dict[str, float] = field(default_factory=dict)
     turn_id: str = ""
     artifacts: tuple[dict[str, Any], ...] = ()
+    run_id: str = ""
+    engine: str = "legacy"
