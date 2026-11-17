@@ -583,10 +583,16 @@ class TurnRuntime:
         count_request = re.search(r"\b(?:cu[aá]ntos|cantidad|n[uú]mero|conteo)\b", self.question, re.I)
         amount_claim = bool(set(metrics) & (PAYMENT_KEYS | BALANCE_KEYS)) and not count_request
         clarification = self.action.get("clarification") or {}
+        clarification_question = clarification.get("question", "")
         unsupported_cutoff = re.search(r"\b(?:mes_mmalla|mm_final)\b",
-                                       f"{clarification.get('question', '')} {clarification.get('proposed_rule', '')}", re.I)
+                                       f"{clarification_question} {clarification.get('proposed_rule', '')}", re.I)
+        payment_date_approximation = re.search(
+            r"\bfecha(?:_pago| de pago)\b.*\baproximaci[oó]n\b",
+            clarification_question, re.I,
+        )
         pending_balance_clarification = (
-            action_name == "clarify" and unsupported_cutoff and amount_claim and bool(set(metrics) & BALANCE_KEYS)
+            action_name == "clarify" and (unsupported_cutoff or payment_date_approximation)
+            and amount_claim and bool(set(metrics) & BALANCE_KEYS)
             and "mm_final" not in normalized(self.question).split()
             and not self.agent.metric_definitions.get("pagos_siniestros", {}).get("claims_period")
         )

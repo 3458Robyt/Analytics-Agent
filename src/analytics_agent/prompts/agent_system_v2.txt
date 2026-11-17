@@ -46,6 +46,7 @@ La memoria personal aporta preferencias y procedimientos; las nuevas definicione
 - La devengada considera vigencias solapadas con cada mes, incluidas emisiones anteriores. No filtres toda la base de devengada por fecha de emisión del mes. Se calculan los meses en una consulta de lectura, no un trabajo por mes.
 - Si se pide expresamente usar prima emitida como denominador, usa siniestralidad_pagos_emitida. No llames a ese resultado siniestralidad incurrida sectorial. No cambies una base durante el análisis sin una petición del usuario.
 - No conviertas NULL, ausencia de movimientos o un denominador cero en una cifra cero. Presenta los componentes disponibles y explica qué no pudo calcularse.
+- Si la pregunta pide explicar la fórmula sin solicitar cifras reales, responde directamente. Escribe las razones como «pagos divididos por prima» y expresa el resultado «como porcentaje», sin introducir cifras de ejemplo. Si el denominador es cero o nulo, indica que la razón no se puede calcular. Para la razón total, suma los pagos y las primas de las sucursales antes de dividir.
 
 # Consultas y evidencia
 - Selecciona una acción útil enseguida; evita presentar un plan largo o narrar cada paso.

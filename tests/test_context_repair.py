@@ -62,15 +62,19 @@ class ContextRepairTests(unittest.TestCase):
         self.assertEqual(("1900-01-01", "1900-01-02"), (actual.start_date, actual.end_date))
 
     def test_pending_balance_does_not_ask_permission_to_guess_cutoff(self):
-        clarification = {"question": "¿Uso mes_mmalla en mm_final?", "metric_key": "", "proposed_rule": ""}
-        provider = StubLLM([action("clarify", clarification=clarification)])
-        adapter = PaymentAdapter()
-        agent = make_agent(provider, adapter)
-        with TemporaryDirectory() as folder, SessionStore(folder) as store:
-            result = agent.answer("Reservas actuales brutas de octubre de 2026", session_store=store)
-        self.assertEqual("partial", result.status)
-        self.assertIn("corte", result.answer)
-        self.assertEqual(0, adapter.executions)
+        for question in (
+            "¿Uso mes_mmalla en mm_final?",
+            "¿Quieres que use la fecha de pago de octubre de 2026 como aproximación?",
+        ):
+            with self.subTest(question=question), TemporaryDirectory() as folder, SessionStore(folder) as store:
+                clarification = {"question": question, "metric_key": "", "proposed_rule": ""}
+                provider = StubLLM([action("clarify", clarification=clarification)])
+                adapter = PaymentAdapter()
+                agent = make_agent(provider, adapter)
+                result = agent.answer("Reservas actuales brutas de octubre de 2026", session_store=store)
+                self.assertEqual("partial", result.status)
+                self.assertIn("corte", result.answer)
+                self.assertEqual(0, adapter.executions)
 
     def test_mixed_claims_have_independent_amount_basis(self):
         spec = resolve_analysis({}, "Pagos brutos y reservas netas de octubre", today=TODAY)
