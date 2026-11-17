@@ -123,6 +123,12 @@ class ContextRepairTests(unittest.TestCase):
         self.assertEqual(text, AnalyticsAgent._result_sentence(text, None))
         self.assertIn("No se obtuvo", AnalyticsAgent._result_sentence("El pago ascendió a 35.000 pesos.", None))
 
+    def test_explanations_keep_calendar_dates_and_classification_codes(self):
+        for text in ("Del 1 de junio al 17 de noviembre de 2026.",
+                     "LOB1 corresponde a vicepresidencia; el subprofit 51 se relaciona con el código local 34."):
+            self.assertEqual(text, AnalyticsAgent._result_sentence(text, None))
+        self.assertIn("No se obtuvo", AnalyticsAgent._result_sentence("El pago fue de 51 pesos.", None))
+
     def test_zero_diagnostics_come_from_same_aggregate(self):
         spec = resolve_analysis({}, "Pagos en septiembre de 2026", today=TODAY)
         compiled = compile_analysis(spec, load_metric_definitions(), tables={}, timezone="America/Bogota")

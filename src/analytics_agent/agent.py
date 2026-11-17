@@ -323,7 +323,17 @@ class AnalyticsAgent:
             return f"La consulta devolvió {len(detail.rows)} fila(s) de detalle; se muestran en la tabla."
         # Calendar years, dates and identifiers are not monetary claims.
         numeric_text = re.sub(r"\b(?:19|20)\d{2}-\d{2}(?:-\d{2})?\b|(?i:\b(?:de|en|año|anio|durante)\s+(?:19|20)\d{2}\b)(?![.,]\d|\s*(?:cop|pesos|usd|dólares|%))", "", answer)
-        numeric_text = re.sub(r"(?i)\b(?:codigo|código|ramo|sucursal|job|id)\s*[:#]?\s*\d+\b", "", numeric_text)
+        numeric_text = re.sub(r"(?i)\b(?:código local|codigo local|codigo|código|ramo|sucursal|job|id)\s*[:#]?\s*\d+\b", "", numeric_text)
+        numeric_text = re.sub(
+            r"(?i)\blob[ _]?l?[123]\b|"
+            r"\b(?:subprofit|cod_subprofit(?:_loc)?)\s*[:#=]?\s*\d+\b",
+            "", numeric_text,
+        )
+        numeric_text = re.sub(
+            r"(?i)\b(?:0?[1-9]|[12]\d|3[01])\s+de\s+"
+            r"(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b",
+            "", numeric_text,
+        )
         if answer and not re.search(r"\d", numeric_text):
             return answer
         if answer:
