@@ -227,6 +227,45 @@ def provisional_claims_cases(zone):
     ]
 
 
+def extended_cases(zone):
+    def premium(start, end, filter_sql='', group=''):
+        dimension = {'nombre_sucursal': 'sucursal', 'nombre_ramo_comercial': 'ramo'}.get(group)
+        column = f'{group} AS {dimension}, ' if dimension else ''
+        by = f' GROUP BY {dimension}' if dimension else ''
+        return (
+            f"SELECT {column}SUM(vrprima) AS prima_emitida FROM `{PREMIUMS}` "
+            f"WHERE fecha_emision >= DATE '{start}' AND fecha_emision < DATE '{end}' {filter_sql}{by}"
+        )
+
+    def claims(start, end, field='pago_gross', date='fecha_pago'):
+        return (
+            f"SELECT SUM({field}) AS pagos_siniestros FROM `{NET}` "
+            f"WHERE DATE({date}, '{zone}') >= DATE '{start}' AND DATE({date}, '{zone}') < DATE '{end}'"
+        )
+
+    return [
+        ('ventas_201','¿Cuántas ventas en prima emitida tuvo el ramo 201 del 3 al 12 de octubre de 2026?',
+         premium('2026-10-03','2026-10-13','AND cod_ramo_com=201'), (), False),
+        ('reemplazar_ramo','Cambia el ramo por el código 202 y conserva las mismas fechas.',
+         premium('2026-10-03','2026-10-13','AND cod_ramo_com=202'), (), True),
+        ('ramo_dimension','Quita el filtro de ramo y desglosa por ramo comercial.',
+         premium('2026-10-03','2026-10-13',group='nombre_ramo_comercial'),('ramo',), True),
+        ('cambiar_sucursal','Mejor por sucursal en vez de por ramo, mantén las fechas.',
+         premium('2026-10-03','2026-10-13',group='nombre_sucursal'),('sucursal',), True),
+        ('volver_total','Dame solo el total, sin desglosar por sucursal.',
+         premium('2026-10-03','2026-10-13'), (), True),
+        ('pagos_ocurrencia','¿Cuánto suman los pagos brutos de siniestros ocurridos en septiembre de 2026, por fecha de ocurrencia?',
+         claims('2026-09-01','2026-10-01',date='fecha_accidente'), (), False),
+        ('ocurrencia_neto','Dame ahora el valor neto, manteniendo la fecha de ocurrencia.',
+         claims('2026-09-01','2026-10-01',field='pago_neto',date='fecha_accidente'), (), True),
+        ('cambiar_base_pago','Usa fecha de pago en lugar de fecha de ocurrencia, conservando mes y que sea neto.',
+         claims('2026-09-01','2026-10-01',field='pago_neto'), (), True),
+        ('pagos_cambiar_mes','¿Y en octubre de 2026 con el mismo criterio?',
+         claims('2026-10-01','2026-11-01',field='pago_neto'), (), True),
+        ('fecha_sola','Dame la prima emitida por ramo el 15 de octubre de 2026.',
+         premium('2026-10-15','2026-10-16',group='nombre_ramo_comercial'),('ramo',),False),
+    ]
+
 def check_answer(name, answer, memory, session):
     pending = {'pagos_y_reservas', 'incurrido_neto', 'aclaracion_fecha_pago'}
     status = 'partial' if name in pending else 'complete'
@@ -346,6 +385,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--execute', action='store_true', help='Confirma las consultas de lectura')
     parser.add_argument('--diagnose', action='store_true', help='Perfila siniestros sin llamar al modelo')
+    parser.add_argument('--extended', action='store_true', help='Añade los seguimientos de la batería ampliada')
     parser.add_argument('--case', action='append', default=[], help='Selecciona casos y sus turnos previos')
     parser.add_argument('--period-candidate', action='append', default=[])
     parser.add_argument('--env-file', default='.env')
@@ -388,6 +428,8 @@ def main():
             location = config.settings.bigquery_location or 'us-east1'
             zone = config.settings.timezone
             suite = list(claims_cases(contract, budget.get_table(NET), zone)) if contract else [*cases(), *provisional_claims_cases(zone)]
+            if args.extended and not contract:
+                suite.extend(extended_cases(zone))
             suite = select_cases(suite, args.case)
             run_cases(agent, budget, location, suite, report, args.report)
             report['status'] = 'passed' if suite and all(c['status'] == 'passed' for c in report['cases']) else 'failed'
@@ -413,6 +455,8 @@ def run_comparison(args, baseline):
             env = dict(os.environ, PYTHONPATH=os.pathsep.join(
                 filter(None, (str(checkout / 'src'), os.environ.get('PYTHONPATH')))))
             selected = [item for name in args.case for item in ('--case', name)]
+            if args.extended:
+                selected.append('--extended')
             child = subprocess.run([sys.executable, str(Path(__file__).resolve()), '--execute',
                                     '--env-file', args.env_file, '--budget-bytes', str(limit),
                                     '--report', str(target), *selected], env=env, check=False)

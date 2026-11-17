@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from scripts.validate_workbench import (
-    BudgetClient, ValidationBudgetExceeded, cases, compare_reports, failure_status,
+    BudgetClient, ValidationBudgetExceeded, cases, compare_reports, extended_cases, failure_status,
     provisional_claims_cases, select_cases, write_report,
 )
 
@@ -38,6 +38,13 @@ class WorkbenchValidationTests(unittest.TestCase):
         self.assertTrue(suite[-1][4])
         selected = select_cases(suite, ["quitar_ramo"])
         self.assertEqual([case[0] for case in selected], ["ramo_201", "comparar_quincenas", "quitar_ramo"])
+
+    def test_extended_suite_keeps_prerequisites_for_a_replay(self):
+        suite = extended_cases("America/Bogota")
+        self.assertEqual(10, len({case[0] for case in suite}))
+        selected = select_cases(suite, ["cambiar_base_pago"])
+        self.assertEqual(["pagos_ocurrencia", "ocurrencia_neto", "cambiar_base_pago"],
+                         [case[0] for case in selected])
 
     def test_report_permissions_and_comparison(self):
         with tempfile.TemporaryDirectory() as folder:

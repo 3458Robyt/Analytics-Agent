@@ -30,6 +30,18 @@ class ContextRepairTests(unittest.TestCase):
         grouped = resolve_analysis({}, "Pagos de octubre por ramo, incluyendo total", today=TODAY)
         self.assertEqual(("ramo",), grouped.group_by)
 
+    def test_replace_branch_code_and_drop_grouping_from_natural_followups(self):
+        original = resolve_analysis({}, "Prima por sucursal del ramo 201 del 3 al 12 de octubre de 2026",
+                                    today=TODAY)
+        replaced = resolve_analysis({}, "Cambia el ramo por el código 202 y conserva las mismas fechas.",
+                                    today=TODAY, active=original.to_dict())
+        self.assertEqual(({"field": "codigo_ramo", "operator": "eq", "value": "202"},), replaced.filters)
+        total = resolve_analysis({}, "Dame solo el total, sin desglosar por sucursal.",
+                                 today=TODAY, active=replaced.to_dict())
+        self.assertEqual((), total.group_by)
+        self.assertEqual(replaced.filters, total.filters)
+        self.assertEqual(("2026-10-03", "2026-10-13"), (total.start_date, total.end_date))
+
     def test_mixed_claims_have_independent_amount_basis(self):
         spec = resolve_analysis({}, "Pagos brutos y reservas netas de octubre", today=TODAY)
         self.assertEqual({"pagos_siniestros": "gross", "reservas_avisadas": "net"}, spec.metric_bases)

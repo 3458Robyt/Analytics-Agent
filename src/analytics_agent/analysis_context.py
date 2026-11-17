@@ -51,7 +51,7 @@ class AnalysisPatch:
     @classmethod
     def from_text(cls, text: str) -> AnalysisPatch:
         return cls(
-            bool(re.search(r"\b(?:sin desglose|sin agrupar|no desglosad[oa]|total general|en total|dame el total)\b", text)),
+            bool(re.search(r"\b(?:sin desglose|sin desglosar|sin agrupar|solo (?:el )?total|no desglosad[oa]|total general|en total|dame el total)\b", text)),
             removes_branch_filter(text),
             bool(re.search(r"\b(?:sin comparacion|sin comparar|quita la comparacion)\b", text)),
         )
@@ -220,7 +220,7 @@ def branch_scope_filter(question: str) -> dict[str, Any] | None:
     text = normalized(question)
     target = (r"(?:cod_ramo(?:_(?:com|tec|cont))?|codigo_ramo|(?:codigo|numero)\s+(?:del?\s+)?"
               r"ramo(?:\s+(?:comercial|tecnico|contable))?|ramos?(?:\s+(?:comercial|tecnico|contable))?"
-              r"(?:\s+(?:codigo|numero|nro\.?|no\.?))?)")
+              r"(?:\s+(?:(?:por|a)\s+(?:el\s+)?)?(?:codigo|numero|nro\.?|no\.?))?)")
     match = re.search(r"\b(?P<target>" + target + r")\s*(?:(?:es|=|:|#)\s*)?[`'\"]?(?P<code>\d+)(?![\w.])", text)
     if match:
         values = [match["code"]]
@@ -341,7 +341,8 @@ def resolve_analysis(action: Mapping[str, Any], question: str, *, today: date,
     group_month = any(value in {"mes", "month"} for value in group)
     if patch.clear_group:
         group = []
-    match = re.search(r"\bpor\s+(area|areas|vp|vicepresidencia|linea mayor|linea menor|lob[ _]?l?[123]|sucursal|ramo(?: comercial)?)\b", text)
+    grouping = re.sub(r"\bsin\s+(?:desglosar|agrupar)\s+por\b", "sin desglose de", text)
+    match = re.search(r"\bpor\s+(area|areas|vp|vicepresidencia|linea mayor|linea menor|lob[ _]?l?[123]|sucursal|ramo(?: comercial)?)\b", grouping)
     if match:
         group = [dimension_name(match[1])]
     elif re.search(r"\b(?:muestra|mostrar|desglosa|desglosar)\s+todos\s+los\s+ramos\b", text):

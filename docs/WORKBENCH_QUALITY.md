@@ -33,6 +33,9 @@ python scripts/validate_workbench.py --execute \
   --report /ruta/local/comparacion.json
 ```
 
+Usa `--extended` para probar también cambios de ramo y desglose, fechas
+de ocurrencia y pago, y el seguimiento de un mes a otro.
+
 La comparación usa LangGraph en procesos separados y sesiones temporales.
 Los dos procesos comparten un límite de 10 GiB estimados. El reporte marca
 fallos de aserción, infraestructura y presupuesto, y registra consultas, bytes
