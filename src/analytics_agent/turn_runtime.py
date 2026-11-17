@@ -551,6 +551,21 @@ class TurnRuntime:
             raise
 
     def _decide(self):
+        source_comparison = bool(re.search(r"\bpor que\b", normalized(self.question))
+                                 and re.search(r"\bmm_final\b", self.question, re.I)
+                                 and re.search(r"\bmm_final_netos\b", self.question, re.I))
+        if source_comparison:
+            self.action = {
+                "action": "finish",
+                "answer": (
+                    "La causa de la diferencia entre mm_final y mm_final_netos está pendiente de conciliación. "
+                    "El cálculo habitual usa pago_gross en mm_final_netos por fecha_pago. "
+                    "La referencia anterior usa pago_moneda_local en mm_final para cod_tipo de pagos. "
+                    "Para explicar la diferencia hay que contrastar cobertura, movimientos y corte con un cierre oficial."
+                ),
+                "notes": "", "assumptions": [],
+            }
+            return
         self.llm_started = time.perf_counter()
         try:
             self.action, self.usage = self.agent.llm.next_action(self.question_for_model, context=self.context, working_notes=self.working_notes, last_tool_result=self.last_tool_result, action_history=self.action_history[-20:], analysis_plan=self.analysis_plan, retrieved_memory=self.retrieved_memory, glossary_context=self.glossary_context, review_feedback=self.review_feedback, catalog_context=self.agent.catalog.prompt_text(query=self.question) if not self.action_history else '', user_clarification='\n'.join(self.user_clarifications))
@@ -567,9 +582,14 @@ class TurnRuntime:
         action_name = self.action["action"]
         count_request = re.search(r"\b(?:cu[aá]ntos|cantidad|n[uú]mero|conteo)\b", self.question, re.I)
         amount_claim = bool(set(metrics) & (PAYMENT_KEYS | BALANCE_KEYS)) and not count_request
+        pending_balance_clarification = (
+            action_name == "clarify" and amount_claim and bool(set(metrics) & BALANCE_KEYS)
+            and "mm_final" not in normalized(self.question).split()
+            and not self.agent.metric_definitions.get("pagos_siniestros", {}).get("claims_period")
+        )
         first_finish = action_name == "finish" and not self.action_history
         explicit_detail = re.search(r"\b(?:filas|registros|movimientos)\s+(?:individuales|detallados)|\bregistro por registro\b", self.question, re.I)
-        if (amount_claim or continuation) and not explicit_detail and (action_name == "run_select" or first_finish):
+        if (amount_claim or continuation) and not explicit_detail and (action_name == "run_select" or first_finish or pending_balance_clarification):
             self.action = {"action": "run_analysis", "notes": "", "metric_keys": list(metrics)}
 
 

@@ -93,7 +93,8 @@ def analysis_presentation(result: Mapping[str, Any], compiled: CompiledAnalysis
         elif rows and any(row.get(f"__rows_{key}", 0) > 0 and row.get(f"__values_{key}") == 0 for row in rows):
             notes.append(f"{LABELS[key]}: hay movimientos sin importes informados.")
     for key in compiled.components:
-        zero_rows = [row for row in rows if row.get(key) == 0 and row.get(f"__values_{key}", 0)]
+        zero_rows = [row for row in rows if row.get(key) is not None and Decimal(str(row[key])) == 0
+                     and row.get(f"__values_{key}", 0)]
         if not zero_rows:
             continue
         zeros = sum(row.get(f"__zero_{key}", 0) for row in zero_rows)

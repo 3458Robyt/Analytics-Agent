@@ -42,6 +42,36 @@ class ContextRepairTests(unittest.TestCase):
         self.assertEqual(replaced.filters, total.filters)
         self.assertEqual(("2026-10-03", "2026-10-13"), (total.start_date, total.end_date))
 
+    def test_calendar_qualifier_cannot_become_branch_name(self):
+        actual = resolve_analysis({}, "Prima emitida por ramo exactamente el 15 de octubre de 2026", today=TODAY)
+        self.assertEqual((), actual.filters)
+        self.assertEqual(("ramo",), actual.group_by)
+        self.assertEqual(("2026-10-15", "2026-10-16"), (actual.start_date, actual.end_date))
+
+    def test_occurred_claims_and_short_branch_code_followup(self):
+        claims = resolve_analysis({}, "Pagos de siniestros ocurridos en septiembre de 2026", today=TODAY)
+        self.assertEqual("accident", claims.metric_dates["pagos_siniestros"])
+        prior = resolve_analysis({}, "Prima del ramo 201 de octubre de 2026", today=TODAY)
+        next_case = resolve_analysis({}, "¿Y para el código 202 con las mismas fechas?", today=TODAY,
+                                     active=prior.to_dict())
+        self.assertEqual("202", next_case.filters[0]["value"])
+        self.assertEqual(prior.start_date, next_case.start_date)
+
+    def test_historical_year_is_not_replaced_by_current_year(self):
+        actual = resolve_analysis({}, "Pagos de siniestros el 1 de enero de 1900", today=TODAY)
+        self.assertEqual(("1900-01-01", "1900-01-02"), (actual.start_date, actual.end_date))
+
+    def test_pending_balance_does_not_ask_permission_to_guess_cutoff(self):
+        clarification = {"question": "¿Uso mes_mmalla en mm_final?", "metric_key": "", "proposed_rule": ""}
+        provider = StubLLM([action("clarify", clarification=clarification)])
+        adapter = PaymentAdapter()
+        agent = make_agent(provider, adapter)
+        with TemporaryDirectory() as folder, SessionStore(folder) as store:
+            result = agent.answer("Reservas actuales brutas de octubre de 2026", session_store=store)
+        self.assertEqual("partial", result.status)
+        self.assertIn("corte", result.answer)
+        self.assertEqual(0, adapter.executions)
+
     def test_mixed_claims_have_independent_amount_basis(self):
         spec = resolve_analysis({}, "Pagos brutos y reservas netas de octubre", today=TODAY)
         self.assertEqual({"pagos_siniestros": "gross", "reservas_avisadas": "net"}, spec.metric_bases)
@@ -97,7 +127,7 @@ class ContextRepairTests(unittest.TestCase):
         spec = resolve_analysis({}, "Pagos en septiembre de 2026", today=TODAY)
         compiled = compile_analysis(spec, load_metric_definitions(), tables={}, timezone="America/Bogota")
         self.assertIn("COUNTIF", compiled.query.sql)
-        row = {"pagos_siniestros": 0, "__rows_pagos_siniestros": 5, "__values_pagos_siniestros": 4,
+        row = {"pagos_siniestros": "0", "__rows_pagos_siniestros": 5, "__values_pagos_siniestros": 4,
                "__positive_pagos_siniestros": 1, "__negative_pagos_siniestros": 1, "__zero_pagos_siniestros": 2}
         _, _, notes = analysis_presentation({"columns": list(row), "rows": [row]}, compiled)
         self.assertIn("1 importes positivos, 1 negativos y 2 iguales a cero", " ".join(notes))

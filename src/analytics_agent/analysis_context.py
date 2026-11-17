@@ -68,7 +68,7 @@ def period_from_text(text: str, *, today: date, inherited: Mapping[str, Any] | N
                      ) -> tuple[str, str, tuple[str, ...]] | None:
     text = normalized(text)
     inherited = inherited or {}
-    years = re.findall(r"\b(20\d{2})\b", text)
+    years = re.findall(r"\b((?:19|20)\d{2})\b", text)
     old_year = str(inherited.get("start_date", ""))[:4]
     year = int(years[-1]) if years else int(old_year) if old_year.isdigit() else today.year
     if all_history(text):
@@ -113,7 +113,7 @@ def period_from_text(text: str, *, today: date, inherited: Mapping[str, Any] | N
     if months:
         months.sort()
         def adjacent_year(position: int) -> int | None:
-            found = re.match(r"[a-z]+\s+(?:de\s+)?(20\d{2})\b", text[position:])
+            found = re.match(r"[a-z]+\s+(?:de\s+)?((?:19|20)\d{2})\b", text[position:])
             return int(found[1]) if found else None
         first_explicit = adjacent_year(months[0][0])
         last_explicit = adjacent_year(months[-1][0])
@@ -245,7 +245,7 @@ def branch_scope_filter(question: str) -> dict[str, Any] | None:
         invalid = {"en", "para", "durante", "por", "del", "de", "y", "comercial", "tecnico", "contable",
                    "debes", "debe", "deberias", "usa", "usar", "uses", "utiliza", "utilizar", "no", "es", "son",
                    "se", "que", "tiene", "nombre", "numero", "codigo", "campo", "el", "lo", *MONTHS,
-                   "mes", "ano", "primer", "primera", "segundo", "segunda", "ultimo", "ultima"}
+                   "mes", "ano", "exactamente", "especificamente", "unicamente", "solo", "primer", "primera", "segundo", "segunda", "ultimo", "ultima"}
         if (not words or words[0] in invalid or not label[0].isalpha()
                 or any(word in invalid - {"de", "del", "y", "el", "comercial", "tecnico", "contable"} for word in words)
                 or re.search(r"\bcod_\w+", normalized(label))):
@@ -322,6 +322,12 @@ def resolve_analysis(action: Mapping[str, Any], question: str, *, today: date,
     branch = branch_scope_filter(question)
     previous_branch = any(item.get("field") in BRANCH_CODE_FIELDS | BRANCH_NAME_FIELDS
                           for item in previous.get("filters", ()))
+    if branch is None and previous_branch:
+        short_code = re.match(r"^[¿? ]*(?:y|ahora)\s+(?:para|con)\s+(?:el\s+)?codigo\s+(\d+)\b", text)
+        previous_codes = [item for item in previous["filters"] if item.get("field") in BRANCH_CODE_FIELDS]
+        if short_code and len(previous_codes) == 1:
+            branch = {"field": _branch_code_field(previous_codes[0]["field"]),
+                      "operator": "eq", "value": short_code[1]}
     correction_wording = bool(re.search(r"\b(?:te dije|te di|debes?|usa|usar|utiliza|no (?:el )?nombre)\b", text))
     code_correction = wants_branch_code(question) and branch is None and (previous_branch or correction_wording)
     if code_correction and previous and not requested:
@@ -333,7 +339,7 @@ def resolve_analysis(action: Mapping[str, Any], question: str, *, today: date,
     basis = str(previous.get("payment_date_basis", "payment"))
     if re.search(r"fecha_pago|fecha de pago|fecha del pago|pagos efectuados|pagos realizados", text):
         basis = "payment"
-    elif re.search(r"fecha_accidente|fecha de accidente|fecha del accidente|ocurrencia", text):
+    elif re.search(r"fecha_accidente|fecha de accidente|fecha del accidente|ocurrencia|\bocurrid[oa]s?\b", text):
         basis = "accident"
     if basis not in {"accident", "payment"}:
         raise MetricDefinitionError("La fecha de pagos debe ser accidente o pago")
@@ -437,13 +443,13 @@ def resolve_analysis(action: Mapping[str, Any], question: str, *, today: date,
                        "siniestralidad_pagos", "siniestralidad_pagos_emitida"}
     metric_dates = {key: previous.get("metric_dates", {}).get(key, basis)
                     if key in payment_metrics else "period" for key in keys}
-    explicit_date = re.search(r"fecha[_ ](?:de )?(?:pago|accidente)|ocurrencia", text)
+    explicit_date = re.search(r"fecha[_ ](?:de )?(?:pago|accidente)|ocurrencia|\bocurrid[oa]s?\b", text)
     if explicit_date and (len(keys) == 1 or not requested):
         metric_dates.update({key: basis for key in keys if key in payment_metrics})
     elif explicit_date:
         for clause in re.split(r",|;|\by\b", text):
             local_basis = ("payment" if re.search(r"fecha[_ ](?:de )?pago", clause) else
-                           "accident" if re.search(r"fecha[_ ](?:de )?accidente|ocurrencia", clause) else "")
+                           "accident" if re.search(r"fecha[_ ](?:de )?accidente|ocurrencia|\bocurrid[oa]s?\b", clause) else "")
             for key in set(requested_metrics(clause)) & payment_metrics:
                 if local_basis:
                     metric_dates[key] = local_basis

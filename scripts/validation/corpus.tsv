@@ -1,0 +1,120 @@
+¿Cuál fue la prima emitida total de octubre de 2026?	issued
+¿Cuánto se emitió en septiembre por sucursal, incluido el total general?	issued_branch
+¿Cuál fue la prima del ramo comercial código 201 del 1 al 15 de octubre de 2026?	issued201
+¿Cuánto emitió el ramo comercial «Automóviles» durante octubre de 2026?	issued
+¿Cuánto se emitió para los ramos 201 y 202, desglosado por ramo en octubre de 2026?	issued
+¿Cuánto se emitió en octubre de 2026 incluyendo endosos y anulaciones?	issued
+¿Cuánto se emitió por ramo exactamente el 15 de octubre de 2026?	issued_ramo
+¿Cómo afectan un endoso negativo y una anulación al total del mes de emisión?	endoso|anulaci
+¿Qué diferencia hay entre filtrar por fecha de emisión y por inicio de vigencia?	emisi|vigencia
+¿Qué diferencia hay entre prima emitida, prima neta y prima retenida?	emitida|neta|retenida
+¿Cuál fue la prima devengada de octubre de 2026 y qué función interna se usó?	earned
+¿Cómo se devenga en octubre una póliza emitida en septiembre que sigue vigente?	vigencia|octubre
+¿Cómo se calcula la prima devengada de una póliza que cubre solo parte del mes?	días|vigencia
+¿Cuál fue la prima devengada mensual de septiembre a noviembre de 2026?	devengada|mes
+¿Qué puedes devolver si pedí prima emitida y devengada y la función no está disponible?	emitida|devengada
+¿Cuál fue la siniestralidad por pagos de octubre de 2026 usando prima devengada?	ratio
+¿Cómo cambia la siniestralidad si solicito expresamente prima emitida como denominador?	pagos|emitida
+¿Qué significa la siniestralidad si la prima del ramo es cero?	cero|no calcul
+¿Qué informas si el denominador de siniestralidad es nulo o no tiene movimientos?	nulo|denominador
+¿Cómo calculas la siniestralidad total de dos sucursales con primas muy distintas?	pagos|primas
+¿Cuánto fue el pago de siniestros de septiembre de 2026?	pay_sep
+¿Cuánto fueron los pagos brutos de octubre de 2026 por ramo, incluido el total?	pay_ramo
+¿Cuál fue el total de pagos netos de octubre de 2026?	net_oct
+¿Cuánto suman los pagos brutos de siniestros ocurridos en septiembre de 2026?	acc_sep
+¿Cuánto suman los pagos netos de siniestros por ocurrencia en septiembre de 2026?	acc_net
+¿Cuál es el resultado neto de septiembre de 2026 por fecha de pago?	net_sep
+¿Cuánto fue el pago de siniestros el 1 de enero de 1900?	pay_empty
+¿En septiembre de 2026 el pago bruto fue cero por importes cero o por falta de filas?	pay_zero
+¿Cuántos registros con pago bruto distinto de cero hubo en octubre de 2026?	pay_count
+¿Por qué difieren los pagos de septiembre de 2026 entre mm_final y mm_final_netos?	claims_sources
+¿Cuánto se pagó en indemnizaciones durante septiembre de 2026?	indemn
+¿Cuánto se pagó en honorarios durante octubre de 2026?	fees
+¿Qué significa «pago al asegurado» al hablar de indemnizaciones?	indemniz|asegurado
+¿Cómo distingues el importe bruto del neto de honorarios?	bruto|neto
+¿Cuánto suman todos los pagos de octubre de 2026, incluidos los honorarios?	pay_oct
+¿Cuánto se pagó en indemnizaciones y honorarios por separado durante octubre de 2026?	pay_mix
+¿Cómo se incluye la categoría «Honorarios y gastos» en el cálculo de honorarios?	honorarios|gastos
+¿Cómo tratarías mayúsculas, tildes y espacios en cod_estimacion?	tild|espacio
+¿Qué haces con una categoría de pago sin equivalencia revisada?	categoría
+¿Qué diferencia hay entre sumar pagos y contar siniestros con varios movimientos?	movimiento|siniestro
+¿Cuáles fueron las reservas actuales brutas de octubre de 2026?	pending
+¿Cuáles fueron las reservas anteriores netas de octubre de 2026?	pending
+¿Cómo se calcula la variación bruta entre el saldo anterior y el actual?	anterior|actual
+¿Cómo se calcula la variación neta con un corte mensual revisado?	variaci|net
+¿Cuál fue el incurrido neto de octubre de 2026 y qué evidencia falta?	pending
+¿Cómo obtienes el incurrido bruto con pagos y reservas de un cierre verificado?	pagos|reserva
+¿Cuánto se avisó de recobros en octubre de 2026?	pending
+¿Cuánto se avisó de salvamentos en octubre de 2026?	pending
+¿Cuáles fueron los pagos y reservas actuales de octubre de 2026 en un mismo cuadro?	mixed_pending
+¿Puedes calcular el incurrido mensual de octubre de 2026 usando fecha_pago como corte sin validarlo?	pending
+¿Cuál fue la prima emitida de Copropiedades en octubre de 2026?	copro
+¿Cómo se clasifica el código local 34 en VP, línea mayor, línea menor y MOR?	copropiedades|generales|pymes
+¿El subprofit 51 identifica la misma población que el código local 51?	subprofit|34
+¿Cuáles fueron los pagos por área en octubre de 2026?	area
+¿Cuál fue la prima emitida de octubre de 2026 por vicepresidencia?	issued
+¿Cómo se traduce un desglose por LOB1, LOB2 o LOB3?	vicepresidencia|mayor|menor
+¿Qué diferencia hay entre Copropiedades y un filtro explícito por ramo comercial?	copropiedades|ramo
+¿Qué cambia al consultar 201 como ramo comercial, técnico o contable?	comercial|técnico|contable
+¿Cómo evitas duplicar importes cuando varios códigos pertenecen a una misma clasificación?	duplic|código
+¿Puedes afirmar que la jerarquía organizacional actual regía en 2022?	históric|vigencia
+¿Cuál fue la prima emitida por intermediario en octubre de 2026?	issued
+¿Qué diferencia hay entre agrupar por nombre y por código de intermediario?	nombre|código
+¿Cuál fue la prima emitida por canal de distribución en octubre de 2026?	issued
+¿Cuál fue la prima de negocios nuevos frente a renovaciones en octubre de 2026?	issued
+¿Cuál fue la prima de octubre de 2026 para Big Account según el criterio interno?	issued
+¿Qué harías si te pido filtrar Big Account con un campo inexistente?	campo
+¿Qué diferencia hay entre tomador, asegurado y beneficiario?	tomador|asegurado|beneficiario
+¿Puedes usar el beneficiario como sustituto del asegurado para agrupar indemnizaciones?	beneficiario|asegurado
+¿Qué diferencia hay entre coaseguro y reaseguro?	coaseguro|reaseguro
+¿Qué evidencia necesitas para calcular nuestra participación en un coaseguro?	participaci|porcentaje
+¿Qué representa el incurrido sectorial y cómo se relaciona con el interno?	incurrido|reserva
+¿Qué diferencia hay entre saldo de reserva, movimiento de reserva y pago?	saldo|movimiento|pago
+¿Es válido sumar los saldos de reserva de septiembre y octubre como saldo acumulado?	saldo|mes
+¿Qué diferencia hay entre porcentaje y puntos porcentuales?	porcentual
+¿En qué moneda está el total si hay varias monedas y no hay conversión definida?	moneda|conversi
+¿Cómo agregas monedas distintas cuando existe una regla de conversión revisada?	moneda|tipo de cambio
+¿Qué significa cuántas ventas cuando la pregunta pide el valor de la prima?	prima|conteo
+¿Qué haces si un campo existe en BigQuery pero carece de descripción en Excel?	campo|bigquery
+¿Qué haces si un campo descrito en Excel ya no existe en BigQuery?	campo|esquema
+¿Puedes calcular prima retenida con cualquier campo que contenga retención?	reten|verific
+¿Cuánta prima se emitió del 28 de septiembre al 3 de octubre de 2026, ambos incluidos?	issued_cross
+¿Qué periodo corresponde al primer semestre de 2026?	enero|junio
+¿Qué fechas incluyen los últimos seis meses al 17 de noviembre de 2026?	junio|noviembre
+¿Qué fechas incluyen los últimos seis meses cerrados al 17 de noviembre de 2026?	mayo|octubre
+¿Cuál es el periodo de este mes hasta hoy al 17 de noviembre de 2026?	noviembre|17
+¿Cuál es el periodo del 20 de diciembre de 2025 al 10 de enero?	2025|2026
+¿Qué haces si el periodo indicado termina antes de empezar?	inicio|fin
+¿Cuánto fue el pago de siniestros sin fechas?	ask_period
+Octubre de 2026.	pay_oct
+Todo el histórico.	all_history
+¿Cuánto fue la prima del ramo 201 del 3 al 12 de octubre de 2026?	seq201
+¿Y para el código 202 con las mismas fechas?	seq202
+¿Puedes quitar el filtro de ramo y desglosar por ramo comercial?	seq_ramo
+¿Puedes mostrarlo por sucursal en vez de por ramo, con las mismas fechas?	seq_suc
+¿Y cuánto fue en total, sin desglosar por sucursal?	seq_total
+¿Puedes comparar las dos quincenas de octubre de 2026 por sucursal, con diferencia y variación porcentual?	seq_quincena
+¿Cuánto fueron los pagos brutos de siniestros por ocurrencia en septiembre de 2026?	acc_sep
+¿Y en neto, conservando la fecha de ocurrencia?	acc_net
+¿Cuánto da con fecha de pago, manteniendo septiembre y la base neta?	net_sep
+¿Y en octubre de 2026 con el mismo criterio?	net_oct
+¿Cuál es el total de la tabla si el desglose contiene más de 50 filas?	total|filas
+¿Puedes resumir el resultado y después mostrar un cuadro por ramo?	ramo
+¿Cómo se presenta un importe nulo frente a cero?	nulo|cero
+¿Cómo muestras la variación entre quincenas si la primera es cero?	cero|variaci
+¿Qué pasa con un ramo con movimientos en una sola quincena?	quincena|ramo
+¿De dónde salió el último total y qué periodo, filtros y campos se usaron?	periodo|filtro
+¿Puedes abrir el resultado en Excel con todas sus filas?	excel
+¿Qué pasa si solicito exportar un resultado cuya caché venció?	resultado
+¿Qué información sirve para revisar una respuesta en modo auditoría?	sql|parámetro
+¿Cómo presentas una respuesta mixta cuando solo se pudo comprobar un indicador?	indicador
+¿Cómo respondes si el proveedor devuelve JSON inválido para un desglose?	json
+¿Cómo respondes si el proveedor devuelve una tabla en un formato inesperado?	tabla
+¿Qué pasa al retomar una consulta interrumpida después de que BigQuery recibió el trabajo?	trabajo
+¿Qué conservas si falla la verificación después de guardar las filas?	filas
+¿Qué respondes si BigQuery rechaza el acceso a una tabla?	acceso
+Cambia los datos de la tabla de prueba mediante SQL.	no
+¿Qué contexto se usa al iniciar otra conversación con /new?	conversaci
+¿Puedo retomar una conversación que pertenece a otra cuenta?	no
+¿Cómo registro que una cifra parece incorrecta y la vinculo al turno?	feedback
+¿Puede una corrección enviada como feedback cambiar por sí sola una fórmula compartida?	no|revisi
