@@ -15,7 +15,7 @@ from .semantics import MetricDefinitionError, MetricQuery, compile_metric_query
 
 ROUTINE_ID = "analytics-487218.functions.prima_devengada"
 PAYMENTS = {"pagos_siniestros", "honorarios", "indemnizaciones"}
-LABELS = {"prima_emitida": "Prima emitida", "prima_devengada": "Prima devengada",
+LABELS = {"reservas_anteriores": "Reservas anteriores", "variacion_reservas": "Variación de reservas", "incurrido_siniestros": "Incurrido","prima_emitida": "Prima emitida", "prima_devengada": "Prima devengada",
           "pagos_siniestros": "Pagos de siniestros", "reservas_avisadas": "Reservas avisadas",
           "avisos_recobro": "Avisos de recobro", "avisados_salvamentos": "Avisados de salvamentos",
           "honorarios": "Honorarios", "indemnizaciones": "Indemnizaciones",
@@ -66,7 +66,7 @@ def _dimension(field: str) -> str:
 
 def _field(field: str, definition: Mapping[str, Any], table: TableSchema | None) -> str:
     semantic = _dimension(field)
-    claims = definition["table_id"].endswith(".mm_final")
+    claims = definition["table_id"].endswith((".mm_final", ".mm_final_netos"))
     physical = ({"vicepresidencia": "lob_l1", "linea_mayor": "lob_l2", "linea_menor": "lob_l3",
                  "ramo": "ramo_comercial", "sucursal": "nombre_sucursal", "codigo_ramo": "cod_ramo_com",
                  "codigo_ramo_contable": "ramo_contable"} if claims else
@@ -86,6 +86,8 @@ def _field(field: str, definition: Mapping[str, Any], table: TableSchema | None)
 def _prepare_definition(key: str, original: Mapping[str, Any], table: TableSchema | None,
                         spec: AnalysisSpec) -> dict[str, Any]:
     result = dict(original)
+    if result.get("pending_cutoff"):
+        raise MetricDefinitionError("Falta confirmar el campo de corte mensual; este componente queda pendiente")
     if key in PAYMENTS:
         result["date_field"] = "fecha_pago" if spec.payment_date_basis == "payment" else "fecha_accidente"
     dimensions = dict(result.get("dimensions", {}))

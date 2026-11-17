@@ -21,6 +21,41 @@ def number(value: Any, *, percent: bool = False) -> str:
     return rendered + (" %" if percent else "")
 
 
+def with_totals(rows, columns, compiled):
+    if not compiled.spec.group_by or not rows:
+        return rows
+    groups = {}
+    for row in rows:
+        groups.setdefault(row.get('mes'), []).append(row)
+    result = []
+    for month, detail in groups.items():
+        result.extend(detail)
+        total = {column: None for column in columns}
+        if 'mes' in columns:
+            total['mes'] = month
+        dimension = next((c for c in columns if c != 'mes' and not any(c == k or c.startswith(k + '_') for k in (*compiled.components, *compiled.requested))), columns[0])
+        total[dimension] = 'Total general' if month is None else 'Total del mes'
+        for key in compiled.components:
+            values = [Decimal(str(row[key])) for row in detail if row.get(key) is not None]
+            total[key] = sum(values) if values else None
+        for key in compiled.requested:
+            if key.startswith('siniestralidad_'):
+                denominator = total.get('prima_emitida' if key.endswith('_emitida') else 'prima_devengada')
+                numerator = total.get('pagos_siniestros')
+                total[key] = numerator / denominator * 100 if numerator is not None and denominator else None
+        if compiled.spec.comparison_periods:
+            for key in compiled.components:
+                for suffix in ('base', 'actual'):
+                    field = key + '_' + suffix
+                    values = [Decimal(str(row[field])) for row in detail if row.get(field) is not None]
+                    total[field] = sum(values) if values else None
+            for key in compiled.requested:
+                before, after = total.get(key+'_base'), total.get(key+'_actual')
+                total[key+'_diferencia'] = after-before if after is not None and before is not None else None
+                total[key+'_variacion_pct'] = (after-before)/before*100 if before and after is not None else None
+        result.append(total)
+    return tuple(result)
+
 def analysis_presentation(result: Mapping[str, Any], compiled: CompiledAnalysis
                           ) -> tuple[str, SummaryTable, tuple[str, ...]]:
     rows = tuple(dict(row) for row in result.get("rows", ()))
@@ -29,7 +64,7 @@ def analysis_presentation(result: Mapping[str, Any], compiled: CompiledAnalysis
         return comparison_presentation(rows, columns, compiled)
     formats = {column: "percent" if column.startswith("siniestralidad_") else "amount"
                for column in columns if column in LABELS and column not in {"mes", "vicepresidencia", "linea_mayor", "linea_menor", "nombre_lob_mor", "cod_subprofit_loc", "ramo", "sucursal"}}
-    table = SummaryTable("Resumen del análisis", columns, tuple({column: row.get(column) for column in columns} for row in rows),
+    table = SummaryTable("Resumen del análisis", columns, tuple({column: row.get(column) for column in columns} for row in with_totals(rows, columns, compiled)),
                          tuple(formats), {column: LABELS.get(column, column.replace("_", " ").capitalize()) for column in columns}, formats)
     notes = list(compiled.spec.assumptions)
     if compiled.spec.population:
@@ -96,7 +131,7 @@ def comparison_presentation(rows, columns, compiled):
                 labels[column] += " (puntos porcentuales)"
     title = "Comparación · " + LABELS.get(compiled.requested[0], compiled.requested[0]) if len(compiled.requested) == 1 else "Comparación de periodos"
     table = SummaryTable(title, columns,
-                         tuple({key: row.get(key) for key in columns} for row in rows),
+                         tuple({key: row.get(key) for key in columns} for row in with_totals(rows, columns, compiled)),
                          tuple(formats), {key: labels.get(key, key) for key in columns}, formats)
     answer = f"Comparación de **{periods[0]}** frente a **{periods[1]}**, conservando el mismo alcance."
     if len(rows) == 1:

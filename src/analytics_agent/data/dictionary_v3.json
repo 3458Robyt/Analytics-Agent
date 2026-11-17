@@ -1,0 +1,1208 @@
+{
+  "centralizacion-datos.analytics_curated.th_primas_final": {
+    "cod_sucursal": {
+      "name": "cod_sucursal",
+      "data_type": "INTEGER",
+      "description": "Código de sucursal de la póliza"
+    },
+    "cod_ramo_com": {
+      "name": "cod_ramo_com",
+      "data_type": "INTEGER",
+      "description": "Código de ramo comercial"
+    },
+    "nro_poliza": {
+      "name": "nro_poliza",
+      "data_type": "NUMERIC",
+      "description": "Número de póliza"
+    },
+    "nro_sufijo": {
+      "name": "nro_sufijo",
+      "data_type": "NUMERIC",
+      "description": "Número del sufijo de la póliza o renovación (1: primera emisión, 2 o más: la vigencia en la que se encuentra la póliza)"
+    },
+    "nro_endoso": {
+      "name": "nro_endoso",
+      "data_type": "NUMERIC",
+      "description": "Número del endoso o movimiento dentro de la póliza, en ese sufijo (0: primer movimiento, 1 o más: los siguientes)"
+    },
+    "fecha_iniciovig": {
+      "name": "fecha_iniciovig",
+      "data_type": "DATE",
+      "description": "Fecha de inicio de vigencia del endoso"
+    },
+    "fecha_finvig": {
+      "name": "fecha_finvig",
+      "data_type": "DATE",
+      "description": "Fecha de fin de vigencia del endoso"
+    },
+    "fecha_emision": {
+      "name": "fecha_emision",
+      "data_type": "DATE",
+      "description": "Fecha de emisión"
+    },
+    "cod_agente": {
+      "name": "cod_agente",
+      "data_type": "NUMERIC",
+      "description": "Código del agente o intermediario"
+    },
+    "cod_profit": {
+      "name": "cod_profit",
+      "data_type": "INTEGER",
+      "description": "No se usa"
+    },
+    "cod_subprofit": {
+      "name": "cod_subprofit",
+      "data_type": "INTEGER",
+      "description": "No se usa"
+    },
+    "cod_subprofit_loc": {
+      "name": "cod_subprofit_loc",
+      "data_type": "INTEGER",
+      "description": "Centro de costos más detallado (subprofit_center_local), es la jerarquía siguiente a lob_l1, lob_l2, lob_l3) es el código del lob_mor"
+    },
+    "cod_ramo_tec": {
+      "name": "cod_ramo_tec",
+      "data_type": "INTEGER",
+      "description": "Código ramo técnico"
+    },
+    "cod_ramo_cont": {
+      "name": "cod_ramo_cont",
+      "data_type": "INTEGER",
+      "description": "Código ramo contable"
+    },
+    "agrupador_poliza": {
+      "name": "agrupador_poliza",
+      "data_type": "STRING",
+      "description": "Código agrupador de la póliza"
+    },
+    "cod_canaldistr": {
+      "name": "cod_canaldistr",
+      "data_type": "NUMERIC",
+      "description": "Código canal de distribución"
+    },
+    "cod_asegurado": {
+      "name": "cod_asegurado",
+      "data_type": "INTEGER",
+      "description": "Código del asegurado en SISE"
+    },
+    "cod_movimiento": {
+      "name": "cod_movimiento",
+      "data_type": "INTEGER",
+      "description": "Código del movimiento en SISE"
+    },
+    "cod_perdiodofactura": {
+      "name": "cod_perdiodofactura",
+      "data_type": "NUMERIC",
+      "description": "Código del perdiodofactura en SISE"
+    },
+    "cod_tipogrupo": {
+      "name": "cod_tipogrupo",
+      "data_type": "STRING",
+      "description": "Código del tipogrupo en SISE"
+    },
+    "cod_tipopoliza": {
+      "name": "cod_tipopoliza",
+      "data_type": "NUMERIC",
+      "description": "Código del tipopoliza en SISE"
+    },
+    "cod_clasepoliza": {
+      "name": "cod_clasepoliza",
+      "data_type": "NUMERIC",
+      "description": "Código del clasepoliza en SISE"
+    },
+    "vrprima": {
+      "name": "vrprima",
+      "data_type": "FLOAT",
+      "description": "Valor de la prima emitida"
+    },
+    "vrcomision": {
+      "name": "vrcomision",
+      "data_type": "FLOAT",
+      "description": "Valor de la comisión"
+    },
+    "fecha_creacion": {
+      "name": "fecha_creacion",
+      "data_type": "TIMESTAMP",
+      "description": "Fecha de creación del endoso"
+    },
+    "fecha_modificacion": {
+      "name": "fecha_modificacion",
+      "data_type": "TIMESTAMP",
+      "description": "Fecha de modificación del endoso"
+    },
+    "nueva_renovacion": {
+      "name": "nueva_renovacion",
+      "data_type": "STRING",
+      "description": "Marca de \"Nueva\" o \"Renovada\""
+    },
+    "pje_retencion": {
+      "name": "pje_retencion",
+      "data_type": "FLOAT",
+      "description": "Pocentaje de retención de la póliza por parte de SBS"
+    },
+    "pje_cesion": {
+      "name": "pje_cesion",
+      "data_type": "FLOAT",
+      "description": "Porcentaje de cesión en cotrato proporcional de la póliza a otra aseguradora"
+    },
+    "pje_fac": {
+      "name": "pje_fac",
+      "data_type": "FLOAT",
+      "description": "Porcentaje de cesión en contrato facultativo de la póliza a un reasegurador"
+    },
+    "prima_retenida": {
+      "name": "prima_retenida",
+      "data_type": "FLOAT",
+      "description": "Prima retenida de la póliza por parte de SBS"
+    },
+    "prima_cedida": {
+      "name": "prima_cedida",
+      "data_type": "FLOAT",
+      "description": "Prima cedida en contrato proporcional de la póliza a otra aseguradora"
+    },
+    "prima_fac": {
+      "name": "prima_fac",
+      "data_type": "FLOAT",
+      "description": "Prima cedida en contrato facultativo de la póliza a un reasegurador"
+    },
+    "sponsor": {
+      "name": "sponsor",
+      "data_type": "STRING",
+      "description": "Nombre del sponsor del negocio"
+    },
+    "cod_sponsor": {
+      "name": "cod_sponsor",
+      "data_type": "INTEGER",
+      "description": "Código del sponsor del negocio"
+    },
+    "cod_segmento": {
+      "name": "cod_segmento",
+      "data_type": "INTEGER",
+      "description": "Código del segmento"
+    },
+    "cod_canal_venta": {
+      "name": "cod_canal_venta",
+      "data_type": "INTEGER",
+      "description": "Código del canal de venta"
+    },
+    "hmbg": {
+      "name": "hmbg",
+      "data_type": "INTEGER",
+      "description": "Marca de pólizas de hamburguesería (1: si, 0: no)"
+    },
+    "nombre_sucursal": {
+      "name": "nombre_sucursal",
+      "data_type": "STRING",
+      "description": "Nombre de la sucursal"
+    },
+    "nombre_ramo_comercial": {
+      "name": "nombre_ramo_comercial",
+      "data_type": "STRING",
+      "description": "Nombre del ramo comercial en mayúsculas (\"AUTOMOVILES\", etc)"
+    },
+    "numero_documento": {
+      "name": "numero_documento",
+      "data_type": "STRING",
+      "description": "Número de documento del tomador de la póliza"
+    },
+    "nom_tomador": {
+      "name": "nom_tomador",
+      "data_type": "STRING",
+      "description": "Nombre del tomador de la póliza"
+    },
+    "nombre_intermediario": {
+      "name": "nombre_intermediario",
+      "data_type": "STRING",
+      "description": "Nombre del intermediario de seguros o agente"
+    },
+    "disciplina_agente": {
+      "name": "disciplina_agente",
+      "data_type": "STRING",
+      "description": "Disciplina del agente (Otex, Directo, Sponsor, Agrupado, Agencias, etc)"
+    },
+    "clasificacion_agente": {
+      "name": "clasificacion_agente",
+      "data_type": "STRING",
+      "description": "Clasificación del agente(OTEXADO, AGRUPADORA, INDEPENDIENTE, etc)"
+    },
+    "agrupacion_agente": {
+      "name": "agrupacion_agente",
+      "data_type": "STRING",
+      "description": "Agrupación del agente (OTEX MANIZALEZ, PROVISION MEDELLIN, OTEX ROSALES, etc.)"
+    },
+    "nombre_comercial": {
+      "name": "nombre_comercial",
+      "data_type": "STRING",
+      "description": "Nombre comercial u otex asignado"
+    },
+    "vicepresidencia": {
+      "name": "vicepresidencia",
+      "data_type": "STRING",
+      "description": "Line of Business 1, Vicepresidencia"
+    },
+    "linea_mayor": {
+      "name": "linea_mayor",
+      "data_type": "STRING",
+      "description": "Line of Business 2, Línea mayor"
+    },
+    "linea_menor": {
+      "name": "linea_menor",
+      "data_type": "STRING",
+      "description": "Line of Business 3, Línea Menor"
+    },
+    "canal": {
+      "name": "canal",
+      "data_type": "STRING",
+      "description": "Canal de comercialización o distribución (Tradicional, Canales Alternativos, Mercadeo Empresarial, Multinacionales, Licitaciones o Reaseguro)"
+    },
+    "nombre_ramo_tecnico": {
+      "name": "nombre_ramo_tecnico",
+      "data_type": "STRING",
+      "description": "Nombre ram técnico"
+    },
+    "tipo_coaseguro": {
+      "name": "tipo_coaseguro",
+      "data_type": "STRING",
+      "description": "Tipo de coaseguro (Directo, Coaseguro Cedido, Coaseguro Aceptado o Reaseguro Aceptado)"
+    },
+    "periodo_facturacion": {
+      "name": "periodo_facturacion",
+      "data_type": "STRING",
+      "description": "Periodo de facturación (PAGO INMEDIATO, etc)"
+    },
+    "tipo_poliza": {
+      "name": "tipo_poliza",
+      "data_type": "STRING",
+      "description": "Tipo póliza (INDIVIDUAL, etc)"
+    },
+    "nom_clasepoliza": {
+      "name": "nom_clasepoliza",
+      "data_type": "STRING",
+      "description": "Nombre clase póliza"
+    },
+    "big_account": {
+      "name": "big_account",
+      "data_type": "INTEGER",
+      "description": "Marca de big account (1: es big account, 0: no es big account)"
+    },
+    "grupo_empresarial": {
+      "name": "grupo_empresarial",
+      "data_type": "STRING",
+      "description": "Grupo empresarial al que pertenece la póliza"
+    },
+    "big_account_nombre": {
+      "name": "big_account_nombre",
+      "data_type": "STRING",
+      "description": "Nombre de la big account"
+    },
+    "llave_poliza": {
+      "name": "llave_poliza",
+      "data_type": "STRING",
+      "description": "Llave de la póliza (sucursal_ramo_poliza_sufijo)"
+    },
+    "vendor": {
+      "name": "vendor",
+      "data_type": "STRING",
+      "description": "Vendor asociados a los sponsors de canales"
+    },
+    "canal_venta": {
+      "name": "canal_venta",
+      "data_type": "STRING",
+      "description": "Canal de venta"
+    },
+    "segmento": {
+      "name": "segmento",
+      "data_type": "STRING",
+      "description": "Segmento para inclusión financiera"
+    },
+    "nombre_lob_mor": {
+      "name": "nombre_lob_mor",
+      "data_type": "STRING",
+      "description": "Centro de costos más detallado (subprofit_center_local), es la jerarquía siguiente a lob_l1, lob_l2, lob_l3) es el nombre del lob_mor o subprofit_local"
+    }
+  },
+  "centralizacion-datos.analytics_curated.mm_final": {
+    "cod_sucursal": {
+      "name": "cod_sucursal",
+      "data_type": "INTEGER",
+      "description": "Código de sucursal"
+    },
+    "cod_ramo_com": {
+      "name": "cod_ramo_com",
+      "data_type": "INTEGER",
+      "description": "Código de ramo comercial"
+    },
+    "nro_poliza": {
+      "name": "nro_poliza",
+      "data_type": "INTEGER",
+      "description": "Número de póliza siniestrada"
+    },
+    "nro_sufijo": {
+      "name": "nro_sufijo",
+      "data_type": "INTEGER",
+      "description": "Número del sufijo de la póliza o renovación (1: primera emisión, 2 o más: la vigencia en la que se encuentra la póliza)"
+    },
+    "cod_riesgo": {
+      "name": "cod_riesgo",
+      "data_type": "INTEGER",
+      "description": "código del riesgo siniestrado"
+    },
+    "cod_cobertura": {
+      "name": "cod_cobertura",
+      "data_type": "INTEGER",
+      "description": "Cod de cobertura del siniestro"
+    },
+    "nro_siniestro": {
+      "name": "nro_siniestro",
+      "data_type": "INTEGER",
+      "description": "Número de siniestro"
+    },
+    "sub_siniestro": {
+      "name": "sub_siniestro",
+      "data_type": "INTEGER",
+      "description": "Número de subsiniestro"
+    },
+    "id_stro": {
+      "name": "id_stro",
+      "data_type": "INTEGER",
+      "description": "ID  del siniestro en SISE"
+    },
+    "cod_agente": {
+      "name": "cod_agente",
+      "data_type": "INTEGER",
+      "description": "Código del agente del siniestro"
+    },
+    "cod_profit": {
+      "name": "cod_profit",
+      "data_type": "INTEGER",
+      "description": "No se usa"
+    },
+    "cod_subprofit": {
+      "name": "cod_subprofit",
+      "data_type": "INTEGER",
+      "description": "No se usa"
+    },
+    "cod_subprofic_center_local": {
+      "name": "cod_subprofic_center_local",
+      "data_type": "FLOAT",
+      "description": "Centro de costos más detallado (subprofit_center_local), es la jerarquía siguiente a lob_l1, lob_l2, lob_l3"
+    },
+    "ramo_contable": {
+      "name": "ramo_contable",
+      "data_type": "INTEGER",
+      "description": "Ramo de contable del siniestro"
+    },
+    "id_pv": {
+      "name": "id_pv",
+      "data_type": "INTEGER",
+      "description": "ID incremental en SISE para ingestas"
+    },
+    "fecha_accidente": {
+      "name": "fecha_accidente",
+      "data_type": "TIMESTAMP",
+      "description": "Fecha de accidente del siniestro"
+    },
+    "fecha_creacion": {
+      "name": "fecha_creacion",
+      "data_type": "TIMESTAMP",
+      "description": "Fecha de creacion del siniestro"
+    },
+    "fecha_aviso": {
+      "name": "fecha_aviso",
+      "data_type": "TIMESTAMP",
+      "description": "Fecha de aviso del siniestro"
+    },
+    "pago_moneda_estim": {
+      "name": "pago_moneda_estim",
+      "data_type": "FLOAT",
+      "description": "Valor original, en dolar, pesos (cualquier divisa de la moneda original)"
+    },
+    "pago_moneda_local": {
+      "name": "pago_moneda_local",
+      "data_type": "FLOAT",
+      "description": "Valor de la reserva o pago en moneda colombiana"
+    },
+    "fecha_pago": {
+      "name": "fecha_pago",
+      "data_type": "TIMESTAMP",
+      "description": "Fecha de pago del siniestro"
+    },
+    "orden_pago": {
+      "name": "orden_pago",
+      "data_type": "INTEGER",
+      "description": ""
+    },
+    "updatetime": {
+      "name": "updatetime",
+      "data_type": "TIMESTAMP",
+      "description": ""
+    },
+    "pje_cargo_cia": {
+      "name": "pje_cargo_cia",
+      "data_type": "BIGNUMERIC",
+      "description": "Pocentaje de retención de la póliza por parte de SBS"
+    },
+    "mes_mmalla": {
+      "name": "mes_mmalla",
+      "data_type": "TIMESTAMP",
+      "description": "Mes de análisis para el cierre contable"
+    },
+    "incurrido_total": {
+      "name": "incurrido_total",
+      "data_type": "FLOAT",
+      "description": "Valor de las reservas mas los pagos (todo en bruto)"
+    },
+    "total_contrato": {
+      "name": "total_contrato",
+      "data_type": "FLOAT",
+      "description": ""
+    },
+    "participacion_compania": {
+      "name": "participacion_compania",
+      "data_type": "FLOAT",
+      "description": ""
+    },
+    "cod_evento": {
+      "name": "cod_evento",
+      "data_type": "INTEGER",
+      "description": "Cod de evento del CAT del siniestro"
+    },
+    "cod_movimiento": {
+      "name": "cod_movimiento",
+      "data_type": "INTEGER",
+      "description": "Código del movimiento en SISE"
+    },
+    "cod_moneda": {
+      "name": "cod_moneda",
+      "data_type": "INTEGER",
+      "description": "Código de la moneda del movimiento"
+    },
+    "cod_concepto_pago": {
+      "name": "cod_concepto_pago",
+      "data_type": "INTEGER",
+      "description": "Código del concepto del pago del movimiento"
+    },
+    "cod_clase_pago": {
+      "name": "cod_clase_pago",
+      "data_type": "INTEGER",
+      "description": "Código de la clase del pago del movimiento"
+    },
+    "cod_type_of_claim": {
+      "name": "cod_type_of_claim",
+      "data_type": "INTEGER",
+      "description": "Código del tipo de reclamación"
+    },
+    "cod_asegter": {
+      "name": "cod_asegter",
+      "data_type": "INTEGER",
+      "description": "Código de asegurado o tercero"
+    },
+    "cod_desc_coaseg": {
+      "name": "cod_desc_coaseg",
+      "data_type": "INTEGER",
+      "description": "Código de la descripción del coaseguro"
+    },
+    "cod_tipo_pago": {
+      "name": "cod_tipo_pago",
+      "data_type": "INTEGER",
+      "description": "Código del tipo de pago"
+    },
+    "cod_ajustador": {
+      "name": "cod_ajustador",
+      "data_type": "INTEGER",
+      "description": "Código del ajustador del siniestro"
+    },
+    "cod_cod_estimacion": {
+      "name": "cod_cod_estimacion",
+      "data_type": "INTEGER",
+      "description": "Código de cod_estimacion"
+    },
+    "cod_tipo_de_negocio": {
+      "name": "cod_tipo_de_negocio",
+      "data_type": "INTEGER",
+      "description": "Código del tipo de negocio"
+    },
+    "cod_cause_of_loss": {
+      "name": "cod_cause_of_loss",
+      "data_type": "STRING",
+      "description": "Código del cause_of_loss o tipo de pérdida"
+    },
+    "cod_tipo": {
+      "name": "cod_tipo",
+      "data_type": "INTEGER",
+      "description": "Código del tipo de siniestro"
+    },
+    "placa": {
+      "name": "placa",
+      "data_type": "STRING",
+      "description": "Placa registrada en el siniestro"
+    },
+    "codigo_fasecolda": {
+      "name": "codigo_fasecolda",
+      "data_type": "STRING",
+      "description": "Código Fasecolda del vehículo"
+    },
+    "cod_canaldistr": {
+      "name": "cod_canaldistr",
+      "data_type": "INTEGER",
+      "description": "Código canal de distribución"
+    },
+    "numero_solicitud_pago": {
+      "name": "numero_solicitud_pago",
+      "data_type": "INTEGER",
+      "description": ""
+    },
+    "fac": {
+      "name": "fac",
+      "data_type": "FLOAT",
+      "description": ""
+    },
+    "contrato": {
+      "name": "contrato",
+      "data_type": "FLOAT",
+      "description": ""
+    },
+    "retencion": {
+      "name": "retencion",
+      "data_type": "FLOAT",
+      "description": ""
+    },
+    "xol": {
+      "name": "xol",
+      "data_type": "FLOAT",
+      "description": ""
+    },
+    "codigo_estado": {
+      "name": "codigo_estado",
+      "data_type": "INTEGER",
+      "description": "Código de estado del siniestro"
+    },
+    "cod_dpto": {
+      "name": "cod_dpto",
+      "data_type": "STRING",
+      "description": "Código departamento del siniestro"
+    },
+    "cod_municipio": {
+      "name": "cod_municipio",
+      "data_type": "STRING",
+      "description": "Código del municipio del siniestro"
+    },
+    "cod_pais": {
+      "name": "cod_pais",
+      "data_type": "INTEGER",
+      "description": "Codigo indicativo del pais"
+    },
+    "nro_comprobante": {
+      "name": "nro_comprobante",
+      "data_type": "STRING",
+      "description": ""
+    },
+    "cod_clase_poliza": {
+      "name": "cod_clase_poliza",
+      "data_type": "BIGNUMERIC",
+      "description": "Codigo de la clase de la poliza"
+    },
+    "cod_tipo_poliza": {
+      "name": "cod_tipo_poliza",
+      "data_type": "BIGNUMERIC",
+      "description": "Codigo del tipo de la poliza"
+    },
+    "inicio_vig_neta": {
+      "name": "inicio_vig_neta",
+      "data_type": "DATE",
+      "description": "Inicio de vigencia neta del riesgo"
+    },
+    "fin_vig_neta": {
+      "name": "fin_vig_neta",
+      "data_type": "DATE",
+      "description": "Fin de vigencia neta del riesgo"
+    },
+    "fecha_venta": {
+      "name": "fecha_venta",
+      "data_type": "DATE",
+      "description": ""
+    },
+    "sponsor": {
+      "name": "sponsor",
+      "data_type": "STRING",
+      "description": "Nombre del sponsor del negocio"
+    },
+    "cod_nueva_ren": {
+      "name": "cod_nueva_ren",
+      "data_type": "INTEGER",
+      "description": "Codigo que indica si es nueva venta o renovacion"
+    },
+    "ajustador": {
+      "name": "ajustador",
+      "data_type": "STRING",
+      "description": "Ajustador de ajustador del siniestro"
+    },
+    "cod_tdoc_aseg": {
+      "name": "cod_tdoc_aseg",
+      "data_type": "STRING",
+      "description": ""
+    },
+    "numero_documento": {
+      "name": "numero_documento",
+      "data_type": "STRING",
+      "description": "Número de documento del tomador de la póliza"
+    },
+    "nombre_completo": {
+      "name": "nombre_completo",
+      "data_type": "STRING",
+      "description": "Nombre de completo del tomador de la póliza registrada en el siniestro"
+    },
+    "fecha_nacimiento": {
+      "name": "fecha_nacimiento",
+      "data_type": "DATE",
+      "description": ""
+    },
+    "genero_asegurado": {
+      "name": "Genero_asegurado",
+      "data_type": "STRING",
+      "description": ""
+    },
+    "clase_pago": {
+      "name": "clase_pago",
+      "data_type": "STRING",
+      "description": ""
+    },
+    "doc_beneficiario": {
+      "name": "doc_beneficiario",
+      "data_type": "STRING",
+      "description": "Numero de documento del beneficiario"
+    },
+    "beneficiario": {
+      "name": "beneficiario",
+      "data_type": "STRING",
+      "description": "Nombre del beneficiario"
+    },
+    "txt_concepto_pago": {
+      "name": "txt_concepto_pago",
+      "data_type": "STRING",
+      "description": ""
+    },
+    "cod_estimacion": {
+      "name": "cod_estimacion",
+      "data_type": "STRING",
+      "description": "Descripción de la estimación del siniestro (RECOBRO, DEDUCIBLES, GASTOS SALVAMENTOS, HONORARIOS Y GASTOS, SALVAMENTOS, GASTOS RECUPEROS, SALDOS A FAVOR, INDEMNIZACIONES)"
+    },
+    "descripcion_coaseg": {
+      "name": "descripcion_coaseg",
+      "data_type": "STRING",
+      "description": "Describe del tipo de coaseguro"
+    },
+    "moneda": {
+      "name": "moneda",
+      "data_type": "STRING",
+      "description": "Nombre de la divisa del pago o reserva"
+    },
+    "tipo": {
+      "name": "tipo",
+      "data_type": "STRING",
+      "description": "Indica si el siniestro es un avisado o pagado"
+    },
+    "tipo_de_negocio": {
+      "name": "tipo_de_negocio",
+      "data_type": "STRING",
+      "description": ""
+    },
+    "tipo_pago": {
+      "name": "tipo_pago",
+      "data_type": "STRING",
+      "description": "Indica si es un pago parcial o total"
+    },
+    "cause_of_loss": {
+      "name": "cause_of_loss",
+      "data_type": "STRING",
+      "description": "Tipo de perdida"
+    },
+    "txt_type_of_claim": {
+      "name": "txt_type_of_claim",
+      "data_type": "STRING",
+      "description": "Tipología de la reclamación (EVENTO POR ENFERMEDAD, EVENTO ACCIDENTAL, ETC.)"
+    },
+    "descripcion_del_siniestro": {
+      "name": "descripcion_del_siniestro",
+      "data_type": "STRING",
+      "description": "Descripción del siniestro"
+    },
+    "numero_documento_tomador": {
+      "name": "numero_documento_tomador",
+      "data_type": "STRING",
+      "description": "Numero_Documento de tomador de la póliza"
+    },
+    "nom_tomador": {
+      "name": "nom_tomador",
+      "data_type": "STRING",
+      "description": "Nombre del tomador de la póliza registrada en el siniestro"
+    },
+    "segmento_tomador_ingresos": {
+      "name": "segmento_tomador_ingresos",
+      "data_type": "STRING",
+      "description": ""
+    },
+    "big_account": {
+      "name": "big_account",
+      "data_type": "INTEGER",
+      "description": "Marca de big account (1: es big account, 0: no es big account)"
+    },
+    "grupo_empresarial": {
+      "name": "grupo_empresarial",
+      "data_type": "STRING",
+      "description": "Grupo empresarial al que pertenece la póliza"
+    },
+    "big_account_nombre": {
+      "name": "big_account_nombre",
+      "data_type": "STRING",
+      "description": "Nombre de la big account"
+    },
+    "descripcion_ramo_com": {
+      "name": "descripcion_ramo_com",
+      "data_type": "STRING",
+      "description": "Nombre del ramo comercial"
+    },
+    "lob_l1": {
+      "name": "lob_l1",
+      "data_type": "STRING",
+      "description": "Line of Business 1, Vicepresidencia"
+    },
+    "lob_l2": {
+      "name": "lob_l2",
+      "data_type": "STRING",
+      "description": "Line of Business 2, Línea mayor"
+    },
+    "lob_l3": {
+      "name": "lob_l3",
+      "data_type": "STRING",
+      "description": "Line of Business 3, Línea Menor"
+    },
+    "ramo_comercial": {
+      "name": "ramo_comercial",
+      "data_type": "STRING",
+      "description": "Ramo de comercial del siniestro (cod_nombre)"
+    },
+    "nombre": {
+      "name": "nombre",
+      "data_type": "STRING",
+      "description": "Nombre de la sucursal"
+    },
+    "nombre_cobertura": {
+      "name": "nombre_cobertura",
+      "data_type": "STRING",
+      "description": "Nombre de cobertura del siniestro"
+    },
+    "descripcion_evento_cat": {
+      "name": "descripcion_evento_cat",
+      "data_type": "STRING",
+      "description": "Descripcion_Evento de CAT del siniestro"
+    },
+    "nombre_agente": {
+      "name": "nombre_agente",
+      "data_type": "STRING",
+      "description": "Nombre del intermediario (agente)"
+    },
+    "nom_canaldistr": {
+      "name": "nom_canaldistr",
+      "data_type": "STRING",
+      "description": "Nombre del canal de distribucion"
+    },
+    "desc_ramo_contable": {
+      "name": "desc_ramo_contable",
+      "data_type": "STRING",
+      "description": "Nombre del ramo contable"
+    },
+    "municipio_nombre": {
+      "name": "municipio_nombre",
+      "data_type": "STRING",
+      "description": "Nombre del municipio donde ocurrió el siniestro"
+    },
+    "departamento_nombre": {
+      "name": "departamento_nombre",
+      "data_type": "STRING",
+      "description": "Nombre del departamento donde ocurrió el siniestro"
+    },
+    "pais_nombre": {
+      "name": "pais_nombre",
+      "data_type": "STRING",
+      "description": "Nombre del pais donde ocurrio el siniestro"
+    },
+    "clase_poliza": {
+      "name": "clase_poliza",
+      "data_type": "STRING",
+      "description": "Indica la clase de la poliza"
+    },
+    "tipo_poliza": {
+      "name": "tipo_poliza",
+      "data_type": "STRING",
+      "description": "Indica la clase de vehiculo"
+    },
+    "estado_siniestro": {
+      "name": "estado_siniestro",
+      "data_type": "STRING",
+      "description": "Descripción del estado del siniestro"
+    },
+    "tipo_coaseguro": {
+      "name": "tipo_coaseguro",
+      "data_type": "STRING",
+      "description": "Tipo de coaseguro (Directo, Coaseguro Cedido, Coaseguro Aceptado o Reaseguro Aceptado)"
+    },
+    "marca": {
+      "name": "marca",
+      "data_type": "STRING",
+      "description": "Marca del carro siniestrado"
+    },
+    "clase": {
+      "name": "clase",
+      "data_type": "STRING",
+      "description": "Tipo de perdida"
+    },
+    "ref_123": {
+      "name": "ref_123",
+      "data_type": "STRING",
+      "description": "Indica la referencia del vehiculo"
+    },
+    "ano_modelo": {
+      "name": "ano_modelo",
+      "data_type": "INTEGER",
+      "description": "Año o modelo del carro siniestrado"
+    },
+    "disciplina_agente": {
+      "name": "disciplina_agente",
+      "data_type": "STRING",
+      "description": "Disciplina del agente (Otex, Directo, Sponsor, Agrupado, Agencias, etc)"
+    },
+    "clasificacion_agente": {
+      "name": "clasificacion_agente",
+      "data_type": "STRING",
+      "description": "Clasificación del agente(OTEXADO, AGRUPADORA, INDEPENDIENTE, etc)"
+    },
+    "agrupacion_agente": {
+      "name": "agrupacion_agente",
+      "data_type": "STRING",
+      "description": "Agrupación del agente (OTEX MANIZALEZ, PROVISION MEDELLIN, OTEX ROSALES, etc.)"
+    },
+    "nombre_comercial": {
+      "name": "nombre_comercial",
+      "data_type": "STRING",
+      "description": "Nombre comercial u otex asignado"
+    },
+    "numero_radicado_edesk": {
+      "name": "numero_radicado_edesk",
+      "data_type": "INTEGER",
+      "description": ""
+    },
+    "estado_edesk": {
+      "name": "estado_edesk",
+      "data_type": "STRING",
+      "description": ""
+    },
+    "fraude_edesk": {
+      "name": "fraude_edesk",
+      "data_type": "STRING",
+      "description": ""
+    },
+    "fec_ult_doc": {
+      "name": "fec_ult_doc",
+      "data_type": "TIMESTAMP",
+      "description": "Fecha último documento cargado al sistema"
+    }
+  },
+  "centralizacion-datos.analytics_curated.mm_final_netos": {
+    "llave": {
+      "name": "llave",
+      "data_type": "STRING",
+      "description": "Llave sucursal, ramo, siniestro, subsiniestro, cod_estimacion"
+    },
+    "llave_srssc": {
+      "name": "llave_srssc",
+      "data_type": "STRING",
+      "description": "Llave sucursal, ramo, siniestro, subsiniestro, cod_cod_estimacion"
+    },
+    "clave_srssc": {
+      "name": "clave_srssc",
+      "data_type": "STRING",
+      "description": "Llave sucursal, ramo, siniestro, subsiniestro, cod_estimacion"
+    },
+    "cod_sucursal": {
+      "name": "cod_sucursal",
+      "data_type": "INTEGER",
+      "description": "Código de sucursal"
+    },
+    "cod_ramo_com": {
+      "name": "cod_ramo_com",
+      "data_type": "INTEGER",
+      "description": "Código de ramo comercial"
+    },
+    "nro_siniestro": {
+      "name": "nro_siniestro",
+      "data_type": "INTEGER",
+      "description": "Número de siniestro"
+    },
+    "sub_siniestro": {
+      "name": "sub_siniestro",
+      "data_type": "INTEGER",
+      "description": "Número de subsiniestro"
+    },
+    "cod_cod_estimacion": {
+      "name": "cod_cod_estimacion",
+      "data_type": "INTEGER",
+      "description": "Código de cod_estimacion"
+    },
+    "codigo_estado": {
+      "name": "codigo_estado",
+      "data_type": "INTEGER",
+      "description": "Código de estado del siniestro"
+    },
+    "estado_siniestro": {
+      "name": "estado_siniestro",
+      "data_type": "STRING",
+      "description": "Descripción del estado del siniestro"
+    },
+    "cod_subprofic_center_local": {
+      "name": "cod_subprofic_center_local",
+      "data_type": "FLOAT",
+      "description": "Centro de costos más detallado (subprofit_center_local), es la jerarquía siguiente a lob_l1, lob_l2, lob_l3"
+    },
+    "fecha_aviso": {
+      "name": "fecha_aviso",
+      "data_type": "TIMESTAMP",
+      "description": "Fecha de aviso del siniestro"
+    },
+    "fecha_creacion": {
+      "name": "fecha_creacion",
+      "data_type": "TIMESTAMP",
+      "description": "Fecha de creacion del siniestro"
+    },
+    "fecha_accidente": {
+      "name": "fecha_accidente",
+      "data_type": "TIMESTAMP",
+      "description": "Fecha de accidente del siniestro"
+    },
+    "nombre_completo": {
+      "name": "nombre_completo",
+      "data_type": "STRING",
+      "description": "Nombre de completo del tomador de la póliza registrada en el siniestro"
+    },
+    "lob_l1": {
+      "name": "lob_l1",
+      "data_type": "STRING",
+      "description": "Line of Business 1, Vicepresidencia"
+    },
+    "lob_l2": {
+      "name": "lob_l2",
+      "data_type": "STRING",
+      "description": "Line of Business 2, Línea mayor"
+    },
+    "lob_l3": {
+      "name": "lob_l3",
+      "data_type": "STRING",
+      "description": "Line of Business 3, Línea Menor"
+    },
+    "cod_cobertura": {
+      "name": "cod_cobertura",
+      "data_type": "INTEGER",
+      "description": "Cod de cobertura del siniestro"
+    },
+    "nombre_cobertura": {
+      "name": "nombre_cobertura",
+      "data_type": "STRING",
+      "description": "Nombre de cobertura del siniestro"
+    },
+    "ajustador": {
+      "name": "ajustador",
+      "data_type": "STRING",
+      "description": "Ajustador de ajustador del siniestro"
+    },
+    "txt_type_of_claim": {
+      "name": "txt_type_of_claim",
+      "data_type": "STRING",
+      "description": "Tipología de la reclamación (EVENTO POR ENFERMEDAD, EVENTO ACCIDENTAL, ETC.)"
+    },
+    "descripcion_evento_cat": {
+      "name": "descripcion_evento_cat",
+      "data_type": "STRING",
+      "description": "Descripcion_Evento de CAT del siniestro"
+    },
+    "cod_evento": {
+      "name": "cod_evento",
+      "data_type": "INTEGER",
+      "description": "Cod de evento del CAT del siniestro"
+    },
+    "ramo_comercial": {
+      "name": "ramo_comercial",
+      "data_type": "STRING",
+      "description": "Ramo de comercial del siniestro (cod_nombre)"
+    },
+    "nom_tomador": {
+      "name": "nom_tomador",
+      "data_type": "STRING",
+      "description": "Nombre del tomador de la póliza registrada en el siniestro"
+    },
+    "numero_documento_tomador": {
+      "name": "numero_documento_tomador",
+      "data_type": "STRING",
+      "description": "Numero_Documento de tomador de la póliza"
+    },
+    "placa": {
+      "name": "placa",
+      "data_type": "STRING",
+      "description": "Placa registrada en el siniestro"
+    },
+    "big_account": {
+      "name": "big_account",
+      "data_type": "INTEGER",
+      "description": "Marca de big account (1: es big account, 0: no es big account)"
+    },
+    "big_account_nombre": {
+      "name": "big_account_nombre",
+      "data_type": "STRING",
+      "description": "Nombre de la big account"
+    },
+    "descripcion_del_siniestro": {
+      "name": "descripcion_del_siniestro",
+      "data_type": "STRING",
+      "description": "Descripción del siniestro"
+    },
+    "marca": {
+      "name": "marca",
+      "data_type": "STRING",
+      "description": "Marca del carro siniestrado"
+    },
+    "ano_modelo": {
+      "name": "ano_modelo",
+      "data_type": "INTEGER",
+      "description": "Año o modelo del carro siniestrado"
+    },
+    "fecha_pago": {
+      "name": "fecha_pago",
+      "data_type": "TIMESTAMP",
+      "description": "Fecha de pago del siniestro"
+    },
+    "cod_agente": {
+      "name": "cod_agente",
+      "data_type": "INTEGER",
+      "description": "Código del agente del siniestro"
+    },
+    "nro_sufijo": {
+      "name": "nro_sufijo",
+      "data_type": "INTEGER",
+      "description": "Número del sufijo de la póliza o renovación (1: primera emisión, 2 o más: la vigencia en la que se encuentra la póliza)"
+    },
+    "cod_estimacion": {
+      "name": "cod_estimacion",
+      "data_type": "STRING",
+      "description": "Descripción de la estimación del siniestro (RECOBRO, DEDUCIBLES, GASTOS SALVAMENTOS, HONORARIOS Y GASTOS, SALVAMENTOS, GASTOS RECUPEROS, SALDOS A FAVOR, INDEMNIZACIONES)"
+    },
+    "nro_poliza": {
+      "name": "nro_poliza",
+      "data_type": "INTEGER",
+      "description": "Número de póliza siniestrada"
+    },
+    "cod_riesgo": {
+      "name": "cod_riesgo",
+      "data_type": "INTEGER",
+      "description": "código del riesgo siniestrado"
+    },
+    "fec_ult_doc": {
+      "name": "fec_ult_doc",
+      "data_type": "TIMESTAMP",
+      "description": "Fecha último documento cargado al sistema"
+    },
+    "inicio_vig_neta": {
+      "name": "inicio_vig_neta",
+      "data_type": "DATE",
+      "description": "Inicio de vigencia neta del riesgo"
+    },
+    "fin_vig_neta": {
+      "name": "fin_vig_neta",
+      "data_type": "DATE",
+      "description": "Fin de vigencia neta del riesgo"
+    },
+    "ramo_contable": {
+      "name": "ramo_contable",
+      "data_type": "INTEGER",
+      "description": "Ramo de contable del siniestro"
+    },
+    "cod_dpto": {
+      "name": "cod_dpto",
+      "data_type": "STRING",
+      "description": "Código departamento del siniestro"
+    },
+    "departamento_nombre": {
+      "name": "departamento_nombre",
+      "data_type": "STRING",
+      "description": "Nombre del departamento donde ocurrió el siniestro"
+    },
+    "cod_municipio": {
+      "name": "cod_municipio",
+      "data_type": "STRING",
+      "description": "Código del municipio del siniestro"
+    },
+    "municipio_nombre": {
+      "name": "municipio_nombre",
+      "data_type": "STRING",
+      "description": "Nombre del municipio donde ocurrió el siniestro"
+    },
+    "salvamentos": {
+      "name": "salvamentos",
+      "data_type": "FLOAT",
+      "description": "Valor de salvamento del siniestro"
+    },
+    "recobro": {
+      "name": "recobro",
+      "data_type": "FLOAT",
+      "description": "Valor del recobro del siniestro"
+    },
+    "reserva_anterior_neto": {
+      "name": "reserva_anterior_neto",
+      "data_type": "FLOAT",
+      "description": "Reserva de anterior del siniestro"
+    },
+    "reserva_actual_neto": {
+      "name": "reserva_actual_neto",
+      "data_type": "FLOAT",
+      "description": "Reserva de actual del siniestro"
+    },
+    "reserva_gross": {
+      "name": "reserva_gross",
+      "data_type": "FLOAT",
+      "description": "Reserva gross o bruta del periodo actual"
+    },
+    "reserva_gross_anterior": {
+      "name": "reserva_gross_anterior",
+      "data_type": "FLOAT",
+      "description": "Reserva gross o bruta del periodo anterior"
+    },
+    "pago_neto": {
+      "name": "pago_neto",
+      "data_type": "FLOAT",
+      "description": "Pago Neto del periodo actual"
+    },
+    "pago_gross": {
+      "name": "pago_gross",
+      "data_type": "FLOAT",
+      "description": "Pago gross o bruto del periodo actual"
+    },
+    "tipologia": {
+      "name": "tipologia",
+      "data_type": "STRING",
+      "description": "Clasificación de tipología ()"
+    },
+    "rangos": {
+      "name": "rangos",
+      "data_type": "STRING",
+      "description": "Rangos del incurrido"
+    },
+    "variacion_neto": {
+      "name": "variacion_neto",
+      "data_type": "FLOAT",
+      "description": "Calcula la variación de reserva_actual - reserva_anterior"
+    },
+    "incurrido_neto": {
+      "name": "incurrido_neto",
+      "data_type": "FLOAT",
+      "description": "Es el incurrido neto, calculo: variacion + pago"
+    }
+  }
+}

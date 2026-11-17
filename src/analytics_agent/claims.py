@@ -71,7 +71,7 @@ def enforce_compiled_claims(sql: str, question: str, metric_key: str = "") -> No
     keys = requested_claim_metrics(question)
     if metric_key in CLAIM_METRICS:
         keys.add(metric_key)
-    if not keys or (re.search(r"\bnet[oa]s?\b", normalize_label(question)) and not metric_key):
+    if not keys or (TABLE_IDS["mm_final"] in question and TABLE_IDS["mm_final_netos"] not in question):
         return
     expression = parse_one(sql, read="bigquery")
     claims_sources = {TABLE_IDS["mm_final"], TABLE_IDS["mm_final_netos"]}
@@ -89,7 +89,7 @@ def enforce_compiled_claims(sql: str, question: str, metric_key: str = "") -> No
         raise MetricDefinitionError(
             "Este cálculo tiene una regla confirmada. Usa run_metric con metric_key "
             + ", ".join(sorted(keys))
-            + ", start_date, end_date, group_by y filters. El compilador aplica incurrido_total, tipo y fecha; "
+            + ", start_date, end_date, group_by y filters. El compilador aplica pago_gross o pago_neto y la fecha solicitada; "
             "no intentes otra fórmula en run_select. Usa SELECT DISTINCT para explorar clases."
         )
 
@@ -98,7 +98,7 @@ def select_payment_classes(values: Sequence[str], goal: str, *, explicit: Sequen
     """Select only unambiguous class labels actually returned by BigQuery."""
     labels = list(dict.fromkeys(value for value in values if isinstance(value, str) and value.strip()))
     aliases = {
-        "honorarios": {"honorario", "honorarios"},
+        "honorarios": {"honorario", "honorarios", "honorarios y gastos"},
         "indemnizaciones": {"indemnizacion", "indemnizaciones", "pago de indemnizacion", "pago al asegurado"},
     }
     if explicit:

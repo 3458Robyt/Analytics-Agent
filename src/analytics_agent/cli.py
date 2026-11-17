@@ -8,7 +8,7 @@ import tempfile
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Sequence
@@ -114,7 +114,11 @@ def _download_gcs_object(uri: str, destination: Path) -> Path:
 
 
 def _load_catalog(config: RuntimeConfig, console: Console) -> SchemaCatalog:
-    catalog = SchemaCatalog(tables={})
+    from importlib.resources import files
+    from .schema import ColumnSchema, TableSchema
+    hints = json.loads(files('analytics_agent').joinpath('data', 'dictionary_v3.json').read_text(encoding='utf-8'))
+    catalog = SchemaCatalog(tables={key: TableSchema(key.rsplit('.',1)[-1], key,
+        {name: ColumnSchema(**column) for name,column in values.items()}) for key,values in hints.items()})
     try:
         if config.workbook_path:
             workbook = Path(config.workbook_path).expanduser()
@@ -127,7 +131,14 @@ def _load_catalog(config: RuntimeConfig, console: Console) -> SchemaCatalog:
                 highlight=False,
             )
             return catalog
-        catalog = load_dictionary(workbook)
+        external = load_dictionary(workbook)
+        for table in external.tables.values():
+            if table.table_id.lower() not in catalog.tables:
+                catalog.add_table(table)
+            else:
+                current = catalog.tables[table.table_id.lower()]
+                columns = {**table.columns, **current.columns}
+                catalog.add_table(replace(current, columns=columns), replace_columns=True)
         table_count = len(catalog.tables)
         column_count = sum(len(table.columns) for table in catalog.tables.values())
         description_count = sum(

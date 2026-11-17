@@ -84,9 +84,11 @@ def compile_metric_query(
     filters: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] = (),
     timezone: str = "America/Bogota",
     allow_unbounded: bool = False,
-    payment_date_basis: str = "accident",
+    payment_date_basis: str = "payment",
 ) -> MetricQuery:
     """Compile a confirmed metric and typed, allowlisted query parameters."""
+    if definition.get("pending_cutoff"):
+        raise MetricDefinitionError("Falta confirmar el campo de corte mensual")
     unbounded = allow_unbounded and not start_date and not end_date
     try:
         start = None if unbounded else date.fromisoformat(start_date)

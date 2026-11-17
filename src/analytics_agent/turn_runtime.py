@@ -32,6 +32,10 @@ from .analysis_sql import ROUTINE_ID, compile_analysis, routine_roles
 from .organization import OrganizationCatalog
 from .presentation import analysis_presentation
 
+class PendingCutoffError(MetricDefinitionError):
+    pass
+
+
 class TurnRuntime:
 
     def __init__(self, agent, question, **kwargs):
@@ -152,7 +156,7 @@ class TurnRuntime:
         cached = self.agent._class_cache.get(table_id.lower())
         if cached and time.monotonic() - cached[0] < 3600:
             return cached[1]
-        checked = validate_sql(f"SELECT DISTINCT clase_pago FROM `{table_id}` WHERE LOWER(TRIM(tipo)) = 'pagos' AND clase_pago IS NOT NULL ORDER BY clase_pago", self.agent.catalog)
+        checked = validate_sql(f"SELECT DISTINCT cod_estimacion AS clase_pago FROM `{table_id}` WHERE cod_estimacion IS NOT NULL ORDER BY cod_estimacion", self.agent.catalog)
         started = time.perf_counter()
         dry = self.bigquery.dry_run(checked.sql, location=location)
         self.stage_timings['dry_run'] = self.stage_timings.get('dry_run', 0.0) + time.perf_counter() - started
@@ -236,6 +240,9 @@ class TurnRuntime:
             rule = self.agent.metric_definitions[key]
             components.extend((rule['numerator'], rule['denominator']) if rule.get('kind') == 'ratio' else (key,))
         definitions = {key: dict(value) for key, value in self.agent.metric_definitions.items()}
+        if spec.amount_basis == 'net':
+            for key in ('pagos_siniestros', 'honorarios', 'indemnizaciones'):
+                definitions[key]['value_field'] = 'pago_neto'
         unavailable = dict(failed_components or {})
         signature = None
         for key in dict.fromkeys(components):
@@ -258,12 +265,14 @@ class TurnRuntime:
                         explicit = reader(rule['table_id'], goal)
                     if goal:
                         labels = select_payment_classes(values, goal, explicit=explicit)
-                        rule['required_filters'] = [*rule.get('required_filters', []), {'field': 'clase_pago', 'operator': 'in', 'value': labels}]
+                        rule['required_filters'] = [*rule.get('required_filters', []), {'field': 'cod_estimacion', 'operator': 'in', 'value': labels}]
                     if any((item.get('field') == 'clase_pago' for item in spec.filters)):
-                        spec = replace(spec, filters=tuple(observed_class_filter(values, spec.filters)))
+                        spec = replace(spec, filters=tuple({**f, 'field': 'cod_estimacion'} if f['field']=='clase_pago' else f for f in observed_class_filter(values, spec.filters)))
                 except (MetricDefinitionError, BigQueryError) as error:
                     unavailable[key] = str(error)
         self.active_analysis = spec.to_dict()
+        if all(definitions[k].get('pending_cutoff') for k in components):
+            raise PendingCutoffError('Falta confirmar el campo de corte mensual para reservas, variación e incurrido.')
         return compile_analysis(spec, definitions, tables=self.agent.catalog.tables, timezone=self.agent.settings.timezone, routine_metadata=signature, unavailable=unavailable)
 
     def save_explicit_definition(self, clarification: Clarification, reply: str):
@@ -688,7 +697,7 @@ class TurnRuntime:
                     self.requested_sql = self.action.get('sql', '')
                     self.query_parameters: tuple[dict[str, Any], ...] = ()
                     self.compiled_analysis = None
-                    if self.action['action'] == 'run_metric' and (self.agent.metric_definitions.get(self.action.get('metric_key', ''), {}).get('kind', 'base') != 'base' or len(requested_metrics(self.question)) > 1 or self.agent.organization.from_question(self.question) or (branch_scope_filter(self.question) is not None) or wants_branch_code(self.question) or self.active_analysis or removes_branch_filter(self.question)):
+                    if self.action['action'] == 'run_metric':
                         self.action = {**self.action, 'action': 'run_analysis'}
                     if self.action['action'] == 'run_analysis':
                         self.compiled_analysis = self.prepare_analysis(self.action)
@@ -909,7 +918,7 @@ class TurnRuntime:
                         self.query_data.setdefault(self.page.query_id, {'columns': list(self.page.columns), 'rows': []})['rows'].extend(self.page.rows)
                         self.agent._record_page_job(self.page, self.query_jobs)
                         self.tool_result = {'action': 'query_page', **self.agent._page_result(self.page)}
-            except DateScopeRequired:
+            except (DateScopeRequired, PendingCutoffError):
                 raise
             except Exception as exc:
                 if self.action['action'] in {'run_select', 'run_metric', 'run_analysis'} and self.action.get('sql'):
@@ -925,6 +934,10 @@ class TurnRuntime:
             self.previous_action_id = self.action_id
             self.action_history.append(self.agent._history_entry(self.action['action'], self.action, self.tool_result))
             self.last_tool_result = self.agent._model_tool_result(self.tool_result)
+        except PendingCutoffError as exc:
+            if self.session_store is not None:
+                self.session_store.complete_turn(self.turn_id, str(exc), status='partial')
+            return AgentAnswer(str(exc), status='partial', session_id=self.session_id, turn_id=self.turn_id)
         except DateScopeRequired as exc:
             return self.pending_clarification_answer(Clarification(str(exc), reason='date_scope', estimated_bytes=exc.estimated_bytes))
         except Exception as exc:

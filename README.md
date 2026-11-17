@@ -127,30 +127,7 @@ En Workbench usa `analytics-agent ask "pregunta"` para una consulta puntual o `a
 
 ## Reglas de pagos y reservas
 
-Las consultas generales de siniestros usan `centralizacion-datos.analytics_curated.mm_final` y suman **`incurrido_total`**, conservando signos y todos los registros del periodo:
-
-| Métrica (`metric_key`) | Valor de `tipo` | Fecha |
-| --- | --- | --- |
-| `pagos_siniestros` | Pagos | `fecha_accidente` por defecto; `fecha_pago` si se solicita |
-| `reservas_avisadas` | Avisado | `mes_mmalla` |
-| `avisos_recobro` | aviso de recobro | `mes_mmalla` |
-| `avisados_salvamentos` | avisado de salvamentos | `mes_mmalla` |
-
-Las reservas de varios meses suman todo el rango solicitado. Recobros y salvamentos se muestran por separado y no se restan automáticamente de pagos ni de reservas. Esta definición interna de reservas avisadas no certifica un saldo actuarial al último corte. Las consultas explícitamente netas requieren verificar su propio mapeo; estas reglas no se trasladan automáticamente a `mm_final_netos`.
-
-`honorarios` e `indemnizaciones` aplican además un filtro sobre **valores reales de `clase_pago`**. El agente consulta las etiquetas antes de filtrarlas y las guarda en una caché de una hora durante el proceso. Si su significado es ambiguo, pide las etiquetas exactas. La clase de indemnización identifica el concepto y no demuestra por sí sola quién recibió el dinero.
-
-Ejemplos desde la terminal de Workbench:
-
-```bash
-analytics-agent ask "Total de pagos de septiembre de 2026 por ramo"
-analytics-agent ask "Reservas avisadas del primer semestre de 2026"
-analytics-agent ask "Honorarios pagados en septiembre de 2026"
-analytics-agent ask "Indemnizaciones pagadas en septiembre de 2026"
-analytics-agent ask "Avisos de recobro y avisados de salvamentos de septiembre de 2026, separados"
-```
-
-El glosario vigente se impone sobre procedimientos antiguos de la memoria. Los nombres de campos escritos en la pregunta se comprueban con el esquema de BigQuery o con el dry run: una errata inequívoca se corrige y se comunica; varias equivalencias requieren aclaración. Una descripción faltante no bloquea una columna existente. Para fechas de pago TIMESTAMP se usa `ANALYTICS_AGENT_TIMEZONE` (por defecto `America/Bogota`); `mes_mmalla` conserva el mes de cierre almacenado sin desplazarlo de mes por la zona horaria.
+Las convenciones vigentes están en [docs/CLAIMS_V6.md](docs/CLAIMS_V6.md). Siniestros prioriza `mm_final_netos`, pagos usa `pago_gross` y `fecha_pago`; neto explícito usa `pago_neto`. Ocurrencia equivale a `fecha_accidente`. El corte mensual de reservas sigue pendiente de confirmación.
 
 ## Análisis combinados y clasificación organizacional
 
