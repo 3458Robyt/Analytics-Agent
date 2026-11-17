@@ -11,6 +11,7 @@ from sqlglot import parse_one
 from .analysis_context import AnalysisSpec, shift_month
 from .organization import dimension_name
 from .schema import TableSchema
+from .claims_period import BALANCE_KEYS, bind_claims_period
 from .semantics import MetricDefinitionError, MetricQuery, compile_metric_query
 
 ROUTINE_ID = "analytics-487218.functions.prima_devengada"
@@ -86,10 +87,26 @@ def _field(field: str, definition: Mapping[str, Any], table: TableSchema | None)
 def _prepare_definition(key: str, original: Mapping[str, Any], table: TableSchema | None,
                         spec: AnalysisSpec) -> dict[str, Any]:
     result = dict(original)
+    basis = spec.metric_bases.get(key, spec.amount_basis)
+    if key in PAYMENTS and result["table_id"].endswith(".mm_final_netos"):
+        result["value_field"] = "pago_neto" if basis == "net" else "pago_gross"
+    if key in BALANCE_KEYS and result["table_id"].endswith(".mm_final_netos"):
+        amounts = {
+            "reservas_avisadas": ("reserva_gross", "reserva_actual_neto"),
+            "reservas_anteriores": ("reserva_gross_anterior", "reserva_anterior_neto"),
+            "variacion_reservas": ("reserva_gross", "variacion_neto"),
+            "incurrido_siniestros": ("pago_gross", "incurrido_neto"),
+        }
+        if key in amounts:
+            result["value_field"] = amounts[key][basis == "net"]
+        if basis == "gross" and key in {"incurrido_siniestros", "variacion_reservas"}:
+            result["amount_expression"] = ("`pago_gross` + " if key == "incurrido_siniestros" else "") + "`reserva_gross` - `reserva_gross_anterior`"
+    if key in PAYMENTS | BALANCE_KEYS and result["table_id"].endswith(".mm_final_netos"):
+        result = bind_claims_period(key, result, spec, table, result.get("claims_period", {}))
     if result.get("pending_cutoff"):
-        raise MetricDefinitionError("Falta confirmar el campo de corte mensual; este componente queda pendiente")
+        raise MetricDefinitionError("Falta confirmar el campo de corte mensual")
     if key in PAYMENTS:
-        result["date_field"] = "fecha_pago" if spec.payment_date_basis == "payment" else "fecha_accidente"
+        result["date_field"] = "fecha_pago" if spec.metric_dates.get(key, spec.payment_date_basis) == "payment" else "fecha_accidente"
     dimensions = dict(result.get("dimensions", {}))
     filters = dict(result.get("filter_fields", {}))
     if table and table.metadata_loaded:
@@ -100,6 +117,7 @@ def _prepare_definition(key: str, original: Mapping[str, Any], table: TableSchem
                                   "operators": filters.get(field, {}).get("operators", ["eq", "in"])}
         needed = set(result.get("required_fields", [])) if result.get("kind") == "routine" else {
             result["value_field"], result["date_field"], *(f["field"] for f in result.get("required_filters", []))}
+        needed.update(re.findall(r"`(\w+)`", result.get("amount_expression", "")))
         if needed - set(table.columns):
             raise MetricDefinitionError("Faltan campos comprobados: " + ", ".join(sorted(needed - set(table.columns))))
         if result["date_field"] in table.columns:
@@ -174,7 +192,9 @@ def compile_analysis(spec: AnalysisSpec, definitions: Mapping[str, Mapping[str, 
             first = next_day
     if spec.time_grain == "month" and not periods:
         raise MetricDefinitionError("El cuadro mensual necesita un periodo de análisis")
-    monthly = spec.time_grain == "month"
+    monthly = spec.time_grain == "month" or (len(periods) > 1 and any(
+        key in BALANCE_KEYS and definitions[key].get("claims_period") for key in components
+    ))
     group = tuple(dict.fromkeys(_dimension(item) for item in spec.group_by))
     if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", item) for item in group):
         raise MetricDefinitionError("Dimensión inválida")
@@ -202,10 +222,17 @@ def compile_analysis(spec: AnalysisSpec, definitions: Mapping[str, Mapping[str, 
             base = compile_metric_query(base_definition, start_date="" if is_routine else spec.start_date,
                                         end_date="" if is_routine else spec.end_date, filters=filters,
                                         timezone=timezone, allow_unbounded=True,
-                                        payment_date_basis=spec.payment_date_basis)
+                                        payment_date_basis=spec.metric_dates.get(key, spec.payment_date_basis))
             expression = parse_one(base.sql, read="bigquery")
             where_node = expression.args.get("where")
             where = where_node.this.sql(dialect="bigquery") if where_node is not None else "TRUE"
+            if definition.get("cutoff_field") and key in PAYMENTS:
+                start = date.fromisoformat(spec.start_date).replace(day=1)
+                end = shift_month(start, 1)
+                cutoff = _date_sql(definition["cutoff_field"], {
+                    "date_field_type": definition["cutoff_type"], "time_behavior": "closing_month_sum",
+                }, timezone)
+                where = f"({where}) AND {cutoff} >= DATE '{start}' AND {cutoff} < DATE '{end}'"
             where = re.sub(r"@metric_filter_(\d+)", lambda m: "@" + prefix + "metric_filter_" + m[1], where)
             local_parameters = [{**param, "name": prefix + param["name"]} for param in base.parameters]
             projection = [f"`{physical}` AS `{alias}`" for physical, alias in dims]
@@ -234,11 +261,14 @@ def compile_analysis(spec: AnalysisSpec, definitions: Mapping[str, Mapping[str, 
                 if monthly:
                     projection.insert(0, "c.mes AS mes")
             else:
-                amount = f"`{definition['value_field']}`"
+                amount = definition.get("amount_expression") or f"`{definition['value_field']}`"
                 if monthly:
                     projection.insert(0, f"FORMAT_DATE('%Y-%m', {_date_sql(definition['date_field'], definition, timezone)}) AS mes")
             projection.extend((f"SUM({amount}) AS `{key}`", f"COUNT(*) AS `__rows_{key}`",
                                f"COUNT({amount}) AS `__values_{key}`"))
+            if key in PAYMENTS:
+                projection.extend(f"COUNTIF(({amount}) {op} 0) AS `__{label}_{key}`"
+                                  for op, label in ((">", "positive"), ("<", "negative"), ("=", "zero")))
             body = "SELECT " + ", ".join(projection) + " FROM " + from_sql + " WHERE " + where
             if key_columns:
                 body += " GROUP BY " + ", ".join(f"`{column}`" for column in key_columns)
@@ -274,7 +304,8 @@ def compile_analysis(spec: AnalysisSpec, definitions: Mapping[str, Mapping[str, 
             value = f"a_{key}.`{key}`" if key in available else "CAST(NULL AS FLOAT64)"
         projection.append(f"{value} AS `{key}`")
     for key in available:
-        projection.extend(f"COALESCE(a_{key}.`__{kind}_{key}`, 0) AS `__{kind}_{key}`" for kind in ("rows", "values"))
+        kinds = ("rows", "values", "positive", "negative", "zero") if key in PAYMENTS else ("rows", "values")
+        projection.extend(f"COALESCE(a_{key}.`__{kind}_{key}`, 0) AS `__{kind}_{key}`" for kind in kinds)
     joins = []
     for key in available:
         condition = " AND ".join(f"k.`{column}` IS NOT DISTINCT FROM a_{key}.`{column}`" for column in key_columns) or "TRUE"
@@ -287,6 +318,11 @@ def compile_analysis(spec: AnalysisSpec, definitions: Mapping[str, Mapping[str, 
 
 def _compile_comparison(spec: AnalysisSpec, definitions, **kwargs) -> CompiledAnalysis:
     """Compare independently calculated periods on identical dimensions and scope."""
+    if BALANCE_KEYS.intersection(spec.metric_keys) and any(
+        shift_month(date.fromisoformat(start), 1) < date.fromisoformat(end)
+        for start, end in spec.comparison_periods
+    ):
+        raise MetricDefinitionError("Para comparar saldos, elige un mes completo para cada periodo")
     if len(spec.comparison_periods) != 2:
         raise MetricDefinitionError("La comparación requiere exactamente dos periodos")
     queries, parameters, compiled = [], [], []

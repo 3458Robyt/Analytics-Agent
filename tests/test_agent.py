@@ -317,7 +317,7 @@ class AgentLoopTests(unittest.TestCase):
         self.assertEqual(1, bq.executions)
         self.assertIn("SUM(`vrprima`)", bq.sql[0])
         self.assertIn("`fecha_emision` >= CAST('2026-01-01' AS DATE)", bq.sql[0])
-        self.assertEqual(75, len(result.summary_table.rows))
+        self.assertEqual(76, len(result.summary_table.rows))
         self.assertEqual([], llm.reviews)
 
     def test_clarification_is_collected_in_the_same_turn_and_confirmed_definition_is_personal(self):
@@ -366,9 +366,9 @@ class AgentLoopTests(unittest.TestCase):
                 "", session_store=store, pending_turn_id=waiting.turn_id,
                 clarification_response="Usa fecha_pago y suma neto",
             )
-            self.assertEqual("complete", resumed.status)
+            self.assertEqual("partial", resumed.status)
             self.assertEqual(waiting.turn_id, resumed.turn_id)
-            self.assertEqual("complete", store.get_session(session_id)["turns"][0]["status"])
+            self.assertEqual("partial", store.get_session(session_id)["turns"][0]["status"])
 
 
 if __name__ == "__main__":

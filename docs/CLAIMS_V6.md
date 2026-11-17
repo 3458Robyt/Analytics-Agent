@@ -14,4 +14,50 @@ Confirmadas por el usuario con su equipo en noviembre de 2026.
 
 ## Validación en desarrollo
 
-Las pruebas dirigidas cubren reglas nuevas, pagos brutos/netos con ambos motores, recuperación, CLI y diccionario. La batería histórica completa aún necesita migrar sus fixtures y expectativas de las convenciones anteriores; no se considera aceptada esta entrega hasta resolver esos fallos y contrastar datos reales.
+La batería local cubre pagos brutos y netos con ambos motores, regresiones de conversación, recuperación, CLI y diccionario. Para validar importes de producción falta ejecutar la conciliación con datos reales en Workbench.
+
+## Diagnóstico y conciliación en Workbench
+
+Desde la terminal de Workbench, con el agente instalado y las credenciales de
+BigQuery disponibles, revisa el script y ejecuta las consultas de lectura con
+`--execute`:
+
+```bash
+python scripts/validate_workbench.py --diagnose --execute --report claims-diagnostic.json
+```
+
+El reporte local incluye el esquema, los campos de fecha candidatos, las sumas de
+pagos por mes y categoría, los importes nulos y los signos. Compara filas y llaves
+distintas cuando existe `llave`. Se puede repetir con
+`--period-candidate NOMBRE_DEL_CAMPO` para perfilar campos de cierre que aparezcan en
+el esquema. El primer paso usa solo BigQuery y no requiere credenciales del modelo.
+El diagnóstico usa septiembre y octubre de 2026 y comparte un presupuesto de
+estimaciones de 10 GiB entre sus consultas.
+
+Contrasta el mes y el grano con un cierre o informe oficial del equipo. Las
+distribuciones observadas por sí solas no prueban que una fecha sea la del cierre.
+Una vez revisado, define `ANALYTICS_AGENT_CLAIMS_PERIOD_FILE` en el entorno o
+en `.env` con la ruta de un JSON local. Campos:
+
+| Campo | Valor |
+|---|---|
+| `mode` | `historical_movements`, `monthly_closes` o `latest_close`. |
+| `start`, `end` | Inicio de cobertura e inicio del primer mes fuera de cobertura, en formato AAAA-MM-01. En `latest_close` delimitan un único mes. |
+| `period_field` | Campo real del mes de corte verificado para los modos de cierre. |
+| `grain` | Descripción de qué representa cada fila y su llave. |
+| `reviewed_reference` | Referencia al informe o cierre con el que se reconcilió. |
+
+Con movimientos históricos se habilitan pagos en la cobertura revisada. Los
+cierres habilitan reservas, variación e incurrido para meses completos. Los
+pagos sobre una fuente de cierres se validan un mes por consulta. Un contrato
+ausente deja pendientes los saldos y advierte que la cobertura histórica de
+pagos todavía requiere conciliación.
+
+```bash
+python scripts/validate_workbench.py --execute --report workbench-validation.json
+```
+
+La batería contrasta el SQL del agente con consultas independientes, guarda
+trabajos y tiempos y exige una diferencia máxima de un centavo. Reporta
+`partial` si el contrato no cubre ambos meses de aceptación o si todavía no se
+pueden verificar los saldos. Un reporte parcial no certifica siniestros.

@@ -182,6 +182,13 @@ def evaluate_case(
                           tuple(bigquery.executed_sql or bigquery.queries), "", 0)
 
     failures: list[str] = []
+    if case.get("expect_pending"):
+        if answer.status != "partial" or case["expect_pending"] not in answer.answer:
+            failures.append("La respuesta no identificó el supuesto pendiente esperado.")
+        if bigquery.executed_sql or answer.summary_table:
+            failures.append("Se presentó un importe sin una regla conciliada.")
+        return CaseResult(str(case["id"]), not failures, tuple(failures), tuple(bigquery.executed_sql),
+                          answer.answer, int(answer.usage.get("total_tokens", 0)))
     sql_text = _normalized_sql("\n".join(bigquery.executed_sql))
     if not bigquery.executed_sql:
         failures.append("No se ejecutó ninguna consulta.")
@@ -209,7 +216,9 @@ def evaluate_case(
     else:
         if answer.summary_table is None:
             failures.append("No se presentó la tabla resumen esperada.")
-        elif not _rows_match(answer.summary_table.rows, expected_rows):
+        elif not _rows_match([row for row in answer.summary_table.rows
+                              if not any(value in ("Total general", "Total del mes") for value in row.values())],
+                             expected_rows):
             failures.append("La tabla resumen no coincide con los resultados simulados.")
     return CaseResult(
         case_id=str(case.get("id", "case")),

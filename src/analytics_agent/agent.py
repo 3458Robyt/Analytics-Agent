@@ -49,6 +49,12 @@ class AnalyticsAgent:
         self.bigquery = bigquery
         self.settings = settings
         self.metric_definitions = load_metric_definitions()
+        from .claims_period import load_claims_period
+        contract = load_claims_period()
+        if contract:
+            for rule in self.metric_definitions.values():
+                if rule["table_id"] == TABLE_IDS["mm_final_netos"]:
+                    rule["claims_period"] = contract
         self._class_cache: dict[str, tuple[float, tuple[str, ...]]] = {}
         self._routine_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self.organization = OrganizationCatalog()
@@ -315,7 +321,20 @@ class AnalyticsAgent:
             return "El cuadro presenta los resultados del análisis para el alcance solicitado."
         if detail and detail.rows:
             return f"La consulta devolvió {len(detail.rows)} fila(s) de detalle; se muestran en la tabla."
-        if answer and not any(character.isdigit() for character in answer):
+        # Calendar years, dates and identifiers are not monetary claims.
+        numeric_text = re.sub(r"\b(?:19|20)\d{2}-\d{2}(?:-\d{2})?\b|(?i:\b(?:de|en|año|anio|durante)\s+(?:19|20)\d{2}\b)(?![.,]\d|\s*(?:cop|pesos|usd|dólares|%))", "", answer)
+        numeric_text = re.sub(r"(?i)\b(?:código local|codigo local|codigo|código|ramo|sucursal|job|id)\s*[:#]?\s*\d+\b", "", numeric_text)
+        numeric_text = re.sub(
+            r"(?i)\blob[ _]?l?[123]\b|"
+            r"\b(?:subprofit|cod_subprofit(?:_loc)?)\s*[:#=]?\s*\d+\b",
+            "", numeric_text,
+        )
+        numeric_text = re.sub(
+            r"(?i)\b(?:0?[1-9]|[12]\d|3[01])\s+de\s+"
+            r"(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b",
+            "", numeric_text,
+        )
+        if answer and not re.search(r"\d", numeric_text):
             return answer
         if answer:
             return "No se obtuvo una tabla de resultados que respalde las cifras de la respuesta."

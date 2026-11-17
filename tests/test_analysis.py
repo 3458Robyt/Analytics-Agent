@@ -32,7 +32,7 @@ from analytics_agent.cli import _format_cell
 from tests.test_agent import action
 
 PREMIUMS = "centralizacion-datos.analytics_curated.th_primas_final"
-CLAIMS = "centralizacion-datos.analytics_curated.mm_final"
+CLAIMS = "centralizacion-datos.analytics_curated.mm_final_netos"
 TODAY = date(2026, 10, 28)
 SIGNATURE = {"routine_id": ROUTINE_ID, "routine_type": "SCALAR_FUNCTION", "language": "SQL", "remote": False,
              "arguments": [{"name": name, "data_type": "FLOAT64" if name == "primaemitida" else "DATE"}
@@ -51,7 +51,7 @@ class Oracle:
             ("2026-09-05", "2026-01-01", "2026-12-31", 730, 34, "Copropiedades", "COPRO NUEVO"),
             ("2026-09-05", "2026-01-01", "2026-12-31", 999, 51, "Otro", "COPROPIEDADES"),
         ])
-        self.db.execute("CREATE TABLE claims(tipo TEXT, clase_pago TEXT, incurrido_total REAL, fecha_accidente TEXT, fecha_pago TEXT, mes_mmalla TEXT, lob_l1 TEXT, lob_l2 TEXT, lob_l3 TEXT, ramo_comercial TEXT)")
+        self.db.execute("CREATE TABLE claims(tipo TEXT, cod_estimacion TEXT, pago_gross REAL, fecha_accidente TEXT, fecha_pago TEXT, mes_mmalla TEXT, lob_l1 TEXT, lob_l2 TEXT, lob_l3 TEXT, ramo_comercial TEXT)")
         self.db.executemany("INSERT INTO claims VALUES(?,?,?,?,?,?,?,?,?,?)", [
             ("Pagos", "Indemnización", 93, "2026-09-09", "2026-10-10", "2026-10-01", "Generales", "Copropiedades", "Copropiedades", "COPRO NUEVO"),
             ("Pagos", "Honorarios", -3, "2026-09-12", "2026-09-13", "2026-09-01", "Generales", "Copropiedades", "Copropiedades", "COPRO LEGADO"),
@@ -59,6 +59,8 @@ class Oracle:
             ("Pagos", "Indemnización", 9999, "2026-09-09", "2026-09-09", "2026-09-01", "Generales", "Otro", "Otro", "COPROPIEDADES"),
             ("Avisado", None, 200, None, None, "2026-09-01", "Generales", "Copropiedades", "Copropiedades", "COPRO NUEVO"),
         ])
+        self.db.execute("ALTER TABLE claims ADD COLUMN reserva_gross REAL")
+        self.db.execute("UPDATE claims SET reserva_gross = pago_gross, pago_gross = NULL WHERE tipo = 'Avisado'")
         def earned(end, start, first, last, premium):
             if None in (end, start, first, last, premium):
                 return None
@@ -72,7 +74,7 @@ class Oracle:
         self.fail_routine_sql = fail_routine_sql
         self.columns = {
             PREMIUMS: {"fecha_emision": "DATE", "fecha_iniciovig": "DATE", "fecha_finvig": "DATE", "vrprima": "FLOAT64", "cod_subprofit_loc": "INT64", "linea_mayor": "STRING", "nombre_ramo_comercial": "STRING"},
-            CLAIMS: {"tipo": "STRING", "clase_pago": "STRING", "incurrido_total": "FLOAT64", "fecha_accidente": "DATE", "fecha_pago": "DATE", "mes_mmalla": "DATE", "lob_l1": "STRING", "lob_l2": "STRING", "lob_l3": "STRING", "ramo_comercial": "STRING"},
+            CLAIMS: {"tipo": "STRING", "cod_estimacion": "STRING", "pago_gross": "FLOAT64", "reserva_gross": "FLOAT64", "fecha_accidente": "DATE", "fecha_pago": "DATE", "mes_mmalla": "DATE", "lob_l1": "STRING", "lob_l2": "STRING", "lob_l3": "STRING", "ramo_comercial": "STRING"},
         }
 
     def tables(self):
@@ -210,7 +212,7 @@ class AnalysisTests(unittest.TestCase):
                 self.assertIn("2026-10-16 a 2026-10-31", answer.answer)
             last = answers[-1]
             rows = {row["ramo"]: row for row in last.summary_table.rows}
-            self.assertEqual({"Ramo A", "Ramo B"}, set(rows))
+            self.assertEqual({"Ramo A", "Ramo B", "Total general"}, set(rows))
             self.assertEqual(400, rows["Ramo B"]["prima_emitida_base"])
             self.assertEqual(800, rows["Ramo B"]["prima_emitida_actual"])
             self.assertEqual([], store.get_analysis_state(session)["filters"])
@@ -270,8 +272,8 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(1, len(rows))
         self.assertEqual(730, rows[0]["prima_emitida"])
         self.assertEqual(90, rows[0]["prima_devengada"])
-        self.assertEqual(90, rows[0]["pagos_siniestros"])
-        self.assertEqual(100, rows[0]["siniestralidad_pagos"])
+        self.assertEqual(297, rows[0]["pagos_siniestros"])
+        self.assertEqual(330, rows[0]["siniestralidad_pagos"])
         # Two premium facts and two payment facts would multiply if joined raw.
         self.assertNotIn("JOIN `" + CLAIMS, compiled.query.sql)
 
@@ -281,14 +283,18 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(["2026-05", "2026-06", "2026-07", "2026-08", "2026-09", "2026-10"], [row["mes"] for row in rows])
         self.assertEqual([93, 90, 93, 93, 90, 84], [row["prima_devengada"] for row in rows])
         self.assertEqual(730, rows[-2]["prima_emitida"])
-        self.assertEqual(300, rows[-1]["pagos_siniestros"])
+        self.assertEqual(93, rows[-1]["pagos_siniestros"])
         self.assertTrue(any("parcial" in note for note in compiled.spec.assumptions))
 
     def test_payment_basis_changes_results_and_reserves_keep_month_basis(self):
-        accident = self.compile("Pagos de Copropiedades en septiembre de 2026")
+        accident = self.compile("Pagos de Copropiedades en septiembre de 2026 por fecha de ocurrencia")
         paid = self.compile("Pagos de Copropiedades en septiembre de 2026 usando fecha_pago")
         self.assertEqual(90, self.run_compiled(accident)[0]["pagos_siniestros"])
         self.assertEqual(297, self.run_compiled(paid)[0]["pagos_siniestros"])
+        self.rules["reservas_avisadas"]["claims_period"] = {
+            "mode": "monthly_closes", "period_field": "mes_mmalla",
+            "start": "2026-09-01", "end": "2026-11-01",
+        }
         reserves = self.compile("Reservas de Copropiedades en septiembre de 2026 por fecha_pago")
         self.assertEqual(200, self.run_compiled(reserves)[0]["reservas_avisadas"])
         self.assertIn("mes_mmalla", reserves.query.sql)
@@ -297,7 +303,7 @@ class AnalysisTests(unittest.TestCase):
         agent, _ = self.agent([action("run_analysis"), action("run_analysis")])
         first = agent.answer("Honorarios e indemnizaciones de Copropiedades septiembre de 2026")
         self.assertEqual(-3, first.summary_table.rows[0]["honorarios"])
-        self.assertEqual(93, first.summary_table.rows[0]["indemnizaciones"])
+        self.assertEqual(300, first.summary_table.rows[0]["indemnizaciones"])
         second = agent.answer("Honorarios e indemnizaciones de Copropiedades septiembre de 2026 por fecha_pago")
         self.assertEqual(300, second.summary_table.rows[0]["indemnizaciones"])
         self.assertEqual(1, sum("SELECT DISTINCT" in sql for sql, _ in self.oracle.executed))
@@ -308,7 +314,7 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(2, len(rows))
         coprop = next(row for row in rows if row["linea_mayor"] == "Copropiedades")
         self.assertEqual(730, coprop["prima_emitida"])
-        self.assertEqual(90, coprop["pagos_siniestros"])
+        self.assertEqual(297, coprop["pagos_siniestros"])
         self.assertIn("`lob_l2` AS `linea_mayor`", compiled.query.sql)
         scoped = self.compile("Primas emitidas de Copropiedades en septiembre de 2026")
         self.assertEqual([34], scoped.spec.population["codes"])
@@ -416,12 +422,15 @@ class AnalysisTests(unittest.TestCase):
     def test_one_model_call_fast_answer_and_excel_history_learning_and_session_isolation(self):
         with tempfile.TemporaryDirectory() as folder, SessionStore(folder) as store:
             agent, llm = self.agent([action("run_analysis"), action("run_analysis")], export_dir=str(Path(folder) / "exports"))
+            agent.metric_definitions["pagos_siniestros"]["claims_period"] = {
+                "mode": "historical_movements", "start": "2026-09-01", "end": "2026-11-01",
+            }
             first = agent.answer("Pagos, prima emitida y siniestralidad de Copropiedades septiembre de 2026 en Excel", session_store=store)
             self.assertEqual(1, len(llm.calls))
             self.assertEqual(1, first.query_count)
-            self.assertEqual(100, first.summary_table.rows[0]["siniestralidad_pagos"])
+            self.assertEqual(330, first.summary_table.rows[0]["siniestralidad_pagos"])
             self.assertTrue(any(param["value"] == [34] for param in first.audit[-1]["parameters"]))
-            self.assertIn("100,00 %", first.answer)
+            self.assertIn("330,00 %", first.answer)
             self.assertEqual(1, len(first.artifacts))
             wb = load_workbook(first.artifacts[0]["path"], read_only=True)
             self.addCleanup(wb.close)
@@ -447,7 +456,7 @@ class AnalysisTests(unittest.TestCase):
             result = agent.answer("Pagos, prima emitida y siniestralidad de Copropiedades septiembre de 2026", session_store=store)
             self.assertEqual("partial", result.status)
             self.assertEqual(730, result.summary_table.rows[0]["prima_emitida"])
-            self.assertEqual(90, result.summary_table.rows[0]["pagos_siniestros"])
+            self.assertEqual(297, result.summary_table.rows[0]["pagos_siniestros"])
             self.assertIsNone(result.summary_table.rows[0]["siniestralidad_pagos"])
             self.assertIn("Resultado parcial", result.answer)
             self.assertEqual("partial", store.connection.execute("SELECT status FROM turns WHERE turn_id=?", (result.turn_id,)).fetchone()[0])
@@ -457,7 +466,7 @@ class AnalysisTests(unittest.TestCase):
         agent, _ = self.agent([action("run_analysis")])
         result = agent.answer("Pagos, prima emitida y siniestralidad de Copropiedades septiembre de 2026")
         self.assertEqual("partial", result.status)
-        self.assertEqual(90, result.summary_table.rows[0]["pagos_siniestros"])
+        self.assertEqual(297, result.summary_table.rows[0]["pagos_siniestros"])
         self.assertEqual(730, result.summary_table.rows[0]["prima_emitida"])
 
     def test_missing_coverage_field_does_not_erase_other_metrics(self):
@@ -466,7 +475,7 @@ class AnalysisTests(unittest.TestCase):
         result = agent.answer("Pagos, prima emitida y siniestralidad de Copropiedades septiembre de 2026")
         self.assertEqual("partial", result.status)
         self.assertEqual(730, result.summary_table.rows[0]["prima_emitida"])
-        self.assertEqual(90, result.summary_table.rows[0]["pagos_siniestros"])
+        self.assertEqual(297, result.summary_table.rows[0]["pagos_siniestros"])
         self.assertIsNone(result.summary_table.rows[0]["prima_devengada"])
 
     def test_routine_information_schema_fallback(self):
@@ -475,7 +484,7 @@ class AnalysisTests(unittest.TestCase):
             result = agent.answer("Siniestralidad de Copropiedades septiembre de 2026")
         self.assertEqual("complete", result.status)
         self.assertEqual(2, result.query_count)
-        self.assertEqual(100, result.summary_table.rows[0]["siniestralidad_pagos"])
+        self.assertEqual(330, result.summary_table.rows[0]["siniestralidad_pagos"])
 
     def test_remote_signature_is_not_reclassified_as_sql_by_fallback(self):
         agent, _ = self.agent([action("run_analysis")])
@@ -495,7 +504,7 @@ class AnalysisTests(unittest.TestCase):
         agent.answer("Siniestralidad de Copropiedades septiembre de 2026")
         self.assertEqual(2, self.oracle.routine_calls)
         page = result_page(answer_record(first), 0)
-        self.assertEqual("100,00 %", page["rows"][0]["siniestralidad_pagos"])
+        self.assertEqual("330,00 %", page["rows"][0]["siniestralidad_pagos"])
         self.assertEqual("Siniestralidad sobre devengada", page["column_labels"]["siniestralidad_pagos"])
         self.assertEqual("100,00 %", _format_cell(100, format_kind="percent"))
 

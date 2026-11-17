@@ -17,19 +17,20 @@ from .bigquery_adapter import BigQueryAdapter, BigQueryError
 from .guardrails import extract_table_ids, validate_sql
 from .llm import LLMError, OpenAICompatibleProvider
 from .models import AgentAnswer, AgentSettings, Clarification, SummaryTable, TABLE_IDS
-from .semantics import MetricDefinitionError, compile_metric_query, load_metric_definitions
+from .semantics import MetricDefinitionError
 from .schema import ColumnSchema, SchemaCatalog, TableSchema, merge_bigquery_schema
 from .excel_export import export_results_to_excel
+from .claims_period import BALANCE_KEYS, PAYMENT_KEYS
 from .claims import (
     enforce_compiled_claims, explicit_class_choices,
-    observed_class_filter, requested_payment_class, select_payment_classes,
+    observed_class_filter, select_payment_classes,
 )
 from .field_resolution import UnknownFieldError, resolve_field, resolve_sql_fields
 from .query_scope import DateScopeRequired, all_history, has_period, needs_period
 from .text_encoding import INPUT_REPAIR_NOTICE, dumps_json, repair_text
-from .analysis_context import branch_scope_filter, requested_metrics, resolve_analysis, wants_branch_code, removes_branch_filter
+from .analysis_context import AnalysisPatch, is_explanation, requested_metrics, resolve_analysis
 from .analysis_sql import ROUTINE_ID, compile_analysis, routine_roles
-from .organization import OrganizationCatalog
+from .organization import normalized
 from .presentation import analysis_presentation
 
 class PendingCutoffError(MetricDefinitionError):
@@ -75,18 +76,25 @@ class TurnRuntime:
             return {'action': self.action['action']}
 
         def perform(state):
+            self.defer_financial_review = True
             answer = self.perform()
             if answer is not None:
                 self.graph_answer = answer
-            return {'done': answer is not None}
+            return {'done': answer is not None, 'verify': self.pending_financial is not None}
+
+        def verify(state):
+            self.graph_answer = self.finish_financial()
+            return {'done': True}
 
         graph = StateGraph(dict)
+        graph.add_node('verify_financial', verify)
+        graph.add_edge('verify_financial', END)
         graph.add_node('load_context', initialize)
         graph.add_node('decide', decide)
         for name in ('query', 'tool', 'review', 'clarify'):
             graph.add_node(name, perform)
-            graph.add_conditional_edges(name, lambda s: 'done' if s['done'] else 'next',
-                                        {'done': END, 'next': 'decide'})
+            graph.add_conditional_edges(name, lambda s: 'done' if s['done'] else 'verify' if s['verify'] else 'next',
+                                        {'done': END, 'next': 'decide', 'verify': 'verify_financial'})
         graph.add_edge(START, 'load_context')
         graph.add_conditional_edges('load_context', lambda s: 'done' if s['done'] else 'next',
                                     {'done': END, 'next': 'decide'})
@@ -235,19 +243,42 @@ class TurnRuntime:
         if any((key not in self.agent.metric_definitions for key in spec.metric_keys)):
             raise MetricDefinitionError('Una de las métricas no tiene una definición revisada')
         self.active_analysis = spec.to_dict()
+        if self.session_store is not None:
+            self.session_store.save_analysis_intent(self.session_id, self.turn_id, self.active_analysis)
         components = []
         for key in spec.metric_keys:
             rule = self.agent.metric_definitions[key]
             components.extend((rule['numerator'], rule['denominator']) if rule.get('kind') == 'ratio' else (key,))
         definitions = {key: dict(value) for key, value in self.agent.metric_definitions.items()}
-        if spec.amount_basis == 'net':
-            for key in ('pagos_siniestros', 'honorarios', 'indemnizaciones'):
-                definitions[key]['value_field'] = 'pago_neto'
+        if spec.claims_source == "mm_final":
+            for key in PAYMENT_KEYS | BALANCE_KEYS:
+                if key not in definitions:
+                    continue
+                rule = definitions[key]
+                rule["table_id"] = TABLE_IDS["mm_final"]
+                if key != "pagos_siniestros" or spec.metric_bases.get(key, spec.amount_basis) == "net":
+                    rule["pending_cutoff"] = True
+                    continue
+                rule.update(value_field="pago_moneda_local",
+                            required_filters=[{"field": "cod_tipo", "operator": "eq", "value": 4}])
+                rule["filter_fields"] = {**rule["filter_fields"], "cod_tipo": {"type": "INTEGER", "operators": ["eq"]}}
         unavailable = dict(failed_components or {})
         signature = None
         for key in dict.fromkeys(components):
             rule = definitions[key]
             table = self.ensure_schema(rule['table_id'])
+            if spec.claims_source == "mm_final" and rule.get("pending_cutoff"):
+                unavailable[key] = "Esta métrica no tiene una regla conciliada para mm_final"
+                continue
+            if table and table.metadata_loaded and key in PAYMENT_KEYS:
+                basis = spec.metric_bases.get(key, spec.amount_basis)
+                amount = "pago_neto" if basis == "net" and spec.claims_source == "mm_final_netos" else rule["value_field"]
+                fields = {amount, "fecha_pago" if spec.metric_dates.get(key, spec.payment_date_basis) == "payment" else "fecha_accidente"}
+                if rule.get("payment_class"):
+                    fields.add("cod_estimacion")
+                if not fields <= set(table.columns) and rule["table_id"] not in self.refreshed_schema:
+                    self.refreshed_schema.add(rule["table_id"])
+                    table = self.ensure_schema(rule["table_id"], refresh=True)
             if rule.get('kind') == 'routine':
                 try:
                     signature = self.verified_routine()
@@ -265,15 +296,30 @@ class TurnRuntime:
                         explicit = reader(rule['table_id'], goal)
                     if goal:
                         labels = select_payment_classes(values, goal, explicit=explicit)
+                        if self.session_store is not None and self.class_replies.get(goal) and explicit:
+                            self.session_store.confirm_business_definition(
+                                goal + "_clase_pago",
+                                dumps_json({"kind": "payment_class_mapping", "table_id": rule["table_id"],
+                                            "goal": goal, "labels": labels}),
+                                "Etiquetas de cod_estimacion comprobadas en BigQuery",
+                                self.class_replies[goal][-1],
+                            )
                         rule['required_filters'] = [*rule.get('required_filters', []), {'field': 'cod_estimacion', 'operator': 'in', 'value': labels}]
                     if any((item.get('field') == 'clase_pago' for item in spec.filters)):
                         spec = replace(spec, filters=tuple({**f, 'field': 'cod_estimacion'} if f['field']=='clase_pago' else f for f in observed_class_filter(values, spec.filters)))
                 except (MetricDefinitionError, BigQueryError) as error:
                     unavailable[key] = str(error)
         self.active_analysis = spec.to_dict()
-        if all(definitions[k].get('pending_cutoff') for k in components):
-            raise PendingCutoffError('Falta confirmar el campo de corte mensual para reservas, variación e incurrido.')
-        return compile_analysis(spec, definitions, tables=self.agent.catalog.tables, timezone=self.agent.settings.timezone, routine_metadata=signature, unavailable=unavailable)
+        try:
+            return compile_analysis(spec, definitions, tables=self.agent.catalog.tables,
+                                    timezone=self.agent.settings.timezone, routine_metadata=signature,
+                                    unavailable=unavailable)
+        except MetricDefinitionError as exc:
+            if (all(key in BALANCE_KEYS for key in components)
+                    or "cobertura conciliada" in str(exc)
+                    or spec.claims_source == "mm_final" and all(key in unavailable for key in components)):
+                raise PendingCutoffError(str(exc)) from exc
+            raise
 
     def save_explicit_definition(self, clarification: Clarification, reply: str):
         if clarification.reason == 'date_scope':
@@ -315,7 +361,10 @@ class TurnRuntime:
             data = self.query_data[query_id]
             rows = data.get('rows', [])
             columns = tuple((str(item) for item in data.get('columns', [])))
-            if query_id in self.aggregate_query_ids and query_id not in self.pending_queries and rows and columns and (data.get('result_role', 'answer') == 'answer'):
+            if (query_id in self.aggregate_query_ids and query_id not in self.pending_queries and rows and columns
+                    and data.get('result_role', 'answer') == 'answer'
+                    and (not set(requested_metrics(self.question)) & (PAYMENT_KEYS | BALANCE_KEYS)
+                         or query_id in self.metric_query_ids)):
                 verified_summary = self.agent._summary_from_evidence(None, self.query_data, self.aggregate_query_ids, query_id)
                 break
         latest_error = ''
@@ -370,7 +419,12 @@ class TurnRuntime:
         self.retrieved_memory = ''
         self.glossary_context = ''
         self.local_now = datetime.now(ZoneInfo(self.agent.settings.timezone))
-        self.active_analysis = self.session_store.get_analysis_state(self.session_id) if self.session_store is not None and hasattr(self.session_store, 'get_analysis_state') else {}
+        self.active_analysis = {}
+        if self.session_store is not None:
+            self.active_analysis = (self.session_store.get_analysis_intent(self.session_id)
+                                    or self.session_store.get_analysis_state(self.session_id))
+        if is_explanation(self.question):
+            return self.explain_previous()
         self.context = f'{self.context}\nFecha actual: {self.local_now.date().isoformat()} (zona horaria {self.agent.settings.timezone}).'.strip()
         if self.active_analysis:
             self.context += '\nAnálisis activo de esta conversación (conservar los criterios no modificados):\n' + dumps_json(self.active_analysis, ensure_ascii=False)
@@ -445,6 +499,8 @@ class TurnRuntime:
         self.review_attempts = 0
         self.review_limit = 2
         self.plan_count = 0
+        self.pending_financial = None
+        self.defer_financial_review = False
         self.sequence = self.session_store.next_action_sequence(self.turn_id) if self.session_store is not None and self.turn_id else 0
         if self.resumed_turn is not None:
             self.prior_clarification = self.resumed_turn.get('clarification', {})
@@ -455,6 +511,32 @@ class TurnRuntime:
             if self.session_store is not None:
                 self.session_store.log_action(self.turn_id, self.sequence, 'clarification_received', {}, self.confirmation_event)
                 self.sequence += 1
+
+    def explain_previous(self):
+        text = "Aún no hay un cálculo en esta conversación para explicar."
+        if self.session_store is not None:
+            record = self.session_store.get_session(self.session_id)
+            for turn in reversed(record["turns"]):
+                result = next((item for item in reversed(turn["actions"])
+                               if item["action"] in {"run_analysis", "run_metric"} and item["result"].get("aggregate_rows")), None)
+                if result is None or not turn["summary_table"]:
+                    continue
+                data = result["result"]
+                spec = data.get("analysis", {})
+                period = f" del {spec['start_date']} al {spec['end_date']} (fin exclusivo)" if spec.get("start_date") else ""
+                sources = ", ".join(f"`{table}`" for table in data.get("tables", []))
+                text = f"El cálculo anterior respondió a «{turn['question']}»{period}.\n\n{turn['answer']}"
+                if sources:
+                    text += f"\n\nFuente: {sources}."
+                if result["bq_job_id"]:
+                    text += f" Trabajo de BigQuery: `{result['bq_job_id']}`."
+                if result["sql_text"]:
+                    text += f"\n\n```sql\n{result['sql_text']}\n```"
+                if data.get("query_parameters"):
+                    text += "\n\nParámetros: `" + dumps_json(data["query_parameters"], ensure_ascii=False) + "`."
+                break
+            self.session_store.complete_turn(self.turn_id, text)
+        return AgentAnswer(text, session_id=self.session_id, turn_id=self.turn_id)
 
     def decide(self):
         try:
@@ -469,12 +551,139 @@ class TurnRuntime:
             raise
 
     def _decide(self):
+        source_comparison = bool(re.search(r"\bpor que\b", normalized(self.question))
+                                 and re.search(r"\bmm_final\b", self.question, re.I)
+                                 and re.search(r"\bmm_final_netos\b", self.question, re.I))
+        if source_comparison:
+            self.action = {
+                "action": "finish",
+                "answer": (
+                    "La causa de la diferencia entre mm_final y mm_final_netos está pendiente de conciliación. "
+                    "El cálculo habitual usa pago_gross en mm_final_netos por fecha_pago. "
+                    "La referencia anterior usa pago_moneda_local en mm_final para cod_tipo de pagos. "
+                    "Para explicar la diferencia hay que contrastar cobertura, movimientos y corte con un cierre oficial."
+                ),
+                "notes": "", "assumptions": [],
+            }
+            return
         self.llm_started = time.perf_counter()
         try:
             self.action, self.usage = self.agent.llm.next_action(self.question_for_model, context=self.context, working_notes=self.working_notes, last_tool_result=self.last_tool_result, action_history=self.action_history[-20:], analysis_plan=self.analysis_plan, retrieved_memory=self.retrieved_memory, glossary_context=self.glossary_context, review_feedback=self.review_feedback, catalog_context=self.agent.catalog.prompt_text(query=self.question) if not self.action_history else '', user_clarification='\n'.join(self.user_clarifications))
         finally:
             self.stage_timings['model'] = self.stage_timings.get('model', 0.0) + time.perf_counter() - self.llm_started
         self.agent._add_usage(self.total_usage, self.usage)
+        metrics = requested_metrics(self.question)
+        patch = AnalysisPatch.from_text(normalized(self.question))
+        continuation = bool(self.active_analysis and (
+            (not metrics and (patch.clear_group or patch.clear_branch or patch.clear_comparison))
+            or re.fullmatch(r"(?i)\s*(?:fecha_(?:pago|accidente)|(?:ahora )?netos?|(?:ahora )?brutos?)\s*[.!]?",
+                            self.question)
+        ))
+        action_name = self.action["action"]
+        count_request = re.search(r"\b(?:cu[aá]ntos|cantidad|n[uú]mero|conteo)\b", self.question, re.I)
+        amount_claim = bool(set(metrics) & (PAYMENT_KEYS | BALANCE_KEYS)) and not count_request
+        clarification = self.action.get("clarification") or {}
+        clarification_question = clarification.get("question", "")
+        unsupported_cutoff = re.search(r"\b(?:mes_mmalla|mm_final)\b",
+                                       f"{clarification_question} {clarification.get('proposed_rule', '')}", re.I)
+        payment_date_approximation = re.search(
+            r"\bfecha(?:_pago| de pago)\b.*\baproximaci[oó]n\b",
+            clarification_question, re.I,
+        )
+        pending_balance_clarification = (
+            action_name == "clarify" and (unsupported_cutoff or payment_date_approximation)
+            and amount_claim and bool(set(metrics) & BALANCE_KEYS)
+            and "mm_final" not in normalized(self.question).split()
+            and not self.agent.metric_definitions.get("pagos_siniestros", {}).get("claims_period")
+        )
+        first_finish = action_name == "finish" and not self.action_history
+        explicit_detail = re.search(r"\b(?:filas|registros|movimientos)\s+(?:individuales|detallados)|\bregistro por registro\b", self.question, re.I)
+        if (amount_claim or continuation) and not explicit_detail and (action_name == "run_select" or first_finish or pending_balance_clarification):
+            self.action = {"action": "run_analysis", "notes": "", "metric_keys": list(metrics)}
+
+
+    def finish_financial(self):
+        compiled, query_id, result, warning = self.pending_financial
+        started = time.perf_counter()
+        data = self.query_data[query_id]
+        expected = set(compiled.requested)
+        if compiled.spec.comparison_periods:
+            expected = {key + suffix for key in expected for suffix in
+                        ("_base", "_actual", "_diferencia", "_variacion_pct")}
+        if not expected.issubset(data["columns"]) or data["result_role"] != "answer":
+            message = "BigQuery devolvió columnas que no corresponden a los indicadores solicitados."
+            if self.session_store is not None:
+                self.session_store.log_action(self.turn_id, self.sequence + 1, "analysis_pending", {}, {
+                    "analysis": compiled.spec.to_dict(), "reason": message, "sql": result["sql"],
+                    "job_id": result["job_id"], "query_parameters": result["query_parameters"],
+                })
+                self.session_store.complete_turn(self.turn_id, message, status="partial")
+            return AgentAnswer(message, status="partial", session_id=self.session_id, turn_id=self.turn_id,
+                               query_count=self.query_count, query_jobs=tuple(self.query_jobs.values()),
+                               audit=self.agent._audit_records(self.query_sql, self.query_tables, self.query_jobs,
+                                                               self.query_bytes, self.query_parameter_values))
+        # A compiled response must cover each grouping key once.
+        grouping = [column for column in data["columns"] if column == "mes" or column in compiled.spec.group_by]
+        group_keys = [dumps_json([row.get(column) for column in grouping], default=str) for row in data["rows"]]
+        if len(set(group_keys)) != len(group_keys) and (grouping or not compiled.spec.group_by):
+            message = "BigQuery devolvió más de una fila para el mismo grupo del análisis."
+            if self.session_store is not None:
+                self.session_store.complete_turn(self.turn_id, message, status="partial")
+            return AgentAnswer(message, status="partial", session_id=self.session_id, turn_id=self.turn_id,
+                               query_count=self.query_count, query_jobs=tuple(self.query_jobs.values()),
+                               audit=self.agent._audit_records(self.query_sql, self.query_tables, self.query_jobs,
+                                                               self.query_bytes, self.query_parameter_values))
+        text, summary, notes = analysis_presentation(data, compiled)
+        status = "partial" if compiled.unavailable or warning else "complete"
+        if warning:
+            notes = (*notes, warning)
+            text += "\n\n**Resultado parcial.** BigQuery informó más filas de las que se recibieron."
+        unreviewed_payments = (PAYMENT_KEYS.intersection(compiled.components)
+                               and compiled.spec.claims_source == "mm_final_netos"
+                               and not self.agent.metric_definitions["pagos_siniestros"].get("claims_period"))
+        if unreviewed_payments:
+            notes = (*notes, "Importes por la fecha consultada. Aún falta conciliar su cobertura histórica en esta fuente.")
+            text += "\n\n**Cobertura histórica pendiente de conciliación.**"
+        if re.search(r"\b(?:excel|xlsx)\b", self.question, re.I):
+            try:
+                labels = summary.column_labels
+                path = self.export_results([{
+                    "query_id": query_id, "columns": [labels.get(key, key) for key in summary.columns],
+                    "rows": [{labels.get(key, key): value for key, value in row.items()} for row in summary.rows],
+                    "sql": result["sql"], "tables": result["tables"], "title": summary.title,
+                }], title=self.question[:120], export_dir=self.agent.settings.export_dir,
+                    timezone_name=self.agent.settings.timezone)
+                self.artifacts.append({"type": "excel", "path": str(path), "name": path.name,
+                                       "query_ids": [query_id], "row_count": len(summary.rows)})
+            except Exception as error:
+                status = "partial"
+                notes = (*notes, f"No se pudo crear el Excel ({type(error).__name__}).")
+        self.sequence += 1
+        if self.session_store is not None:
+            self.session_store.log_action(self.turn_id, self.sequence, "run_analysis", self.action, result, aggregate=True)
+            self.session_store.complete_turn(self.turn_id, text, notes, asdict(summary), status=status)
+            if not warning:
+                self.session_store.set_analysis_state(self.session_id, compiled.spec.to_dict())
+            if status == "complete" and not unreviewed_payments:
+                try:
+                    self.session_store.queue_learning_review(
+                        self.turn_id, question=self.question, prior_context=self.retrieved_memory,
+                        plan={**self.analysis_plan, "analysis": compiled.spec.to_dict()}, answer=text,
+                        action_history=[*self.action_history, result], verified=True,
+                        active_learnings=self.session_store.learning_context(self.question),
+                    )
+                except Exception as error:
+                    self.progress(f"No se pudo encolar el aprendizaje ({type(error).__name__}).")
+        self.stage_timings["verify"] = time.perf_counter() - started
+        return AgentAnswer(
+            text, assumptions=tuple(dict.fromkeys([*notes, *self.field_notices])), summary_table=summary,
+            query_count=self.query_count, tables_used=tuple(sorted(self.tables_used)), bytes_processed=self.bytes_processed,
+            usage=self.total_usage, session_id=self.session_id, query_jobs=tuple(self.query_jobs.values()),
+            status=status, audit=self.agent._audit_records(self.query_sql, self.query_tables, self.query_jobs,
+                                                          self.query_bytes, self.query_parameter_values),
+            timings={**self.stage_timings, "total": time.perf_counter() - self.turn_started},
+            turn_id=self.turn_id, artifacts=tuple(self.artifacts),
+        )
 
     def perform(self):
         try:
@@ -609,7 +818,7 @@ class TurnRuntime:
                     if self.summary is not None:
                         self.stored_summary = asdict(self.summary)
                     self.session_store.complete_turn(self.turn_id, self.answer.answer, self.answer.assumptions, self.stored_summary)
-                    if self.active_analysis and self.has_aggregate_results and self.accepted:
+                    if self.active_analysis and self.has_aggregate_results and self.accepted and not requested_metrics(self.question):
                         self.session_store.set_analysis_state(self.session_id, self.active_analysis)
                     self.learning_updates: list[str] = []
                     self.queue_learning = getattr(self.session_store, 'queue_learning_review', None)
@@ -704,91 +913,6 @@ class TurnRuntime:
                         self.requested_sql = self.compiled_analysis.query.sql
                         self.query_parameters = self.compiled_analysis.query.parameters
                         self.action['sql'] = self.requested_sql
-                    elif self.action['action'] == 'run_metric':
-                        self.scope_text = '\n'.join([self.question, *self.explicit_scope_inputs])
-                        self.inherited_scope = self.session_store.temporal_context(self.session_id) if self.session_store is not None and hasattr(self.session_store, 'temporal_context') else ''
-                        self.current_period = has_period(self.scope_text)
-                        if all_history(self.scope_text) and (not self.current_period) or (not self.current_period and (not has_period(self.inherited_scope))):
-                            self.action['start_date'] = self.action['end_date'] = ''
-                        elif not self.action.get('start_date') or not self.action.get('end_date'):
-                            raise MetricDefinitionError('El usuario indicó un periodo: conviértelo a start_date y end_date, sin omitir el filtro temporal')
-                        if self.action.get('metric_key') == 'pagos_siniestros':
-                            self.requested_class = requested_payment_class(self.question)
-                            if self.requested_class:
-                                self.action['metric_key'] = self.requested_class
-                        self.metric_definition = self.agent.metric_definitions.get(str(self.action.get('metric_key', '')))
-                        if self.metric_definition is None:
-                            raise MetricDefinitionError(f"No hay una definición confirmada para `{self.action.get('metric_key', '')}`.")
-                        self.metric_definition = dict(self.metric_definition)
-                        self.legacy_spec = resolve_analysis(self.action, self.question, today=self.local_now.date(), active=self.active_analysis, organization=self.agent.organization)
-                        if str(self.action.get('metric_key')) in {'pagos_siniestros', 'honorarios', 'indemnizaciones'}:
-                            self.metric_definition['date_field'] = 'fecha_pago' if self.legacy_spec.payment_date_basis == 'payment' else 'fecha_accidente'
-                        self.table_id = str(self.metric_definition['table_id'])
-                        self.table = self.ensure_schema(self.table_id)
-                        self.required_fields = {self.metric_definition['value_field'], self.metric_definition['date_field']}
-                        self.required_fields.update((item['field'] for item in self.metric_definition.get('required_filters', [])))
-                        if self.metric_definition.get('payment_class'):
-                            self.required_fields.add('clase_pago')
-                        if self.table and self.table.metadata_loaded:
-                            self.aliases = {cfg['alias']: field for field, cfg in self.metric_definition.get('dimensions', {}).items() if isinstance(cfg, Mapping)}
-                            self.requested_fields = [*self.action.get('group_by', []), *(item.get('field', '') for item in self.action.get('filters', []))]
-                            self.missing = self.required_fields - set(self.table.columns)
-                            self.unknown = [field for field in self.requested_fields if field.lower() not in self.table.columns and self.aliases.get(field) not in self.table.columns]
-                            if (self.missing or self.unknown) and self.table_id not in self.refreshed_schema:
-                                self.refreshed_schema.add(self.table_id)
-                                self.table = self.ensure_schema(self.table_id, refresh=True)
-                        if self.table and self.table.metadata_loaded:
-                            self.missing = self.required_fields - set(self.table.columns)
-                            if self.missing:
-                                raise MetricDefinitionError('Faltan campos necesarios para la regla confirmada: ' + ', '.join(sorted(self.missing)) + '. No sustituyas incurrido_total por otro importe.')
-                            self.dimensions = dict(self.metric_definition.get('dimensions', {}))
-                            self.filter_fields = dict(self.metric_definition.get('filter_fields', {}))
-                            for self.field, self.column in self.table.columns.items():
-                                self.dtype = self.column.data_type.split()[0]
-                                if re.fullmatch('[A-Za-z_][A-Za-z0-9_]*', self.field) and self.dtype in {'STRING', 'INT64', 'INTEGER', 'NUMERIC', 'BIGNUMERIC', 'FLOAT', 'FLOAT64', 'DATE', 'BOOL', 'BOOLEAN'}:
-                                    self.dimensions.setdefault(self.field, {'alias': self.field})
-                                    self.filter_fields[self.field] = {**self.filter_fields.get(self.field, {}), 'type': self.dtype, 'operators': self.filter_fields.get(self.field, {}).get('operators', ['eq', 'in'])}
-                            self.metric_definition.update(dimensions=self.dimensions, filter_fields=self.filter_fields)
-                            self.dtype = self.table.columns[self.metric_definition['date_field']].data_type.split()[0]
-                            if self.dtype not in {'DATE', 'TIMESTAMP', 'DATETIME'}:
-                                raise MetricDefinitionError('El campo temporal de la métrica no tiene un tipo compatible')
-                            self.metric_definition['date_field_type'] = self.dtype
-                            self.aliases = {cfg['alias']: field for field, cfg in self.dimensions.items() if isinstance(cfg, Mapping)}
-
-                            def resolve_metric_field(field):
-                                corrected = resolve_field(field, self.table, self.aliases)
-                                if corrected != field:
-                                    self.field_notices.append(f'Interpreté `{field}` como el campo comprobado `{corrected}`.')
-                                return corrected
-                            self.action['group_by'] = [resolve_metric_field(field) for field in self.action.get('group_by', [])]
-                            self.action['filters'] = [{**item, 'field': resolve_metric_field(item.get('field', ''))} for item in self.action.get('filters', [])]
-                        self.filters = self.action.get('filters', [])
-                        self.class_goal = self.metric_definition.get('payment_class', '')
-                        if self.class_goal or any((item.get('field') == 'clase_pago' for item in self.filters)):
-                            self.values = self.discover_payment_classes(self.table_id, (self.table.location if self.table else '') or self.agent.settings.bigquery_location)
-                            self.filters = observed_class_filter(self.values, self.filters)
-                            if self.class_goal:
-                                try:
-                                    self.selected = select_payment_classes(self.values, self.class_goal)
-                                except MetricDefinitionError:
-                                    self.explicit = []
-                                    for self.reply in self.class_replies.get(str(self.class_goal), []):
-                                        self.explicit = explicit_class_choices(self.reply, self.values) or self.explicit
-                                    self.reader = getattr(self.session_store, 'confirmed_payment_classes', None)
-                                    if not self.explicit and callable(self.reader):
-                                        self.explicit = self.reader(self.table_id, str(self.class_goal))
-                                    if not self.explicit:
-                                        raise
-                                    self.selected = select_payment_classes(self.values, self.class_goal, explicit=self.explicit)
-                                    if self.session_store is not None and self.class_replies.get(str(self.class_goal)):
-                                        self.session_store.confirm_business_definition(str(self.class_goal) + '_clase_pago', json.dumps({'kind': 'payment_class_mapping', 'table_id': self.table_id, 'goal': self.class_goal, 'labels': self.selected}, ensure_ascii=False), 'Etiquetas exactas de clase_pago comprobadas en BigQuery', self.class_replies[str(self.class_goal)][-1])
-                                self.metric_definition['required_filters'] = [*self.metric_definition.get('required_filters', []), {'field': 'clase_pago', 'operator': 'in', 'value': self.selected}]
-                            self.action['filters'] = self.filters
-                        self.metric_query = compile_metric_query(self.metric_definition, start_date=self.action['start_date'], end_date=self.action['end_date'], group_by=self.action['group_by'], filters=self.filters, timezone=self.agent.settings.timezone, allow_unbounded=True, payment_date_basis=self.legacy_spec.payment_date_basis)
-                        self.requested_sql = self.metric_query.sql
-                        self.query_parameters = self.metric_query.parameters
-                        self.action['sql'] = self.requested_sql
-                        self.active_analysis = replace(self.legacy_spec, start_date=self.action['start_date'], end_date=self.action['end_date']).to_dict()
                     else:
                         enforce_compiled_claims(self.requested_sql, self.question_for_model, str(self.action.get('metric_key', '')))
                         for self.table_id in extract_table_ids(self.requested_sql):
@@ -879,33 +1003,13 @@ class TurnRuntime:
                         self.persist_query_result(self.page.query_id)
                     except Exception as storage_error:
                         self.analysis_plan.setdefault('assumptions', []).append('No se pudo guardar una copia local del resultado para exportarlo en otra pregunta: ' + type(storage_error).__name__)
-                    self.tool_result = {'action': 'query_page', 'query_id': self.page.query_id, 'job_id': getattr(self.first_page, 'job_id', ''), 'job_project': getattr(self.first_page, 'job_project', ''), 'location': getattr(self.first_page, 'location', ''), 'columns': list(self.first_page.columns), 'column_types': dict(getattr(self.first_page, 'column_types', {}) or {}), 'rows': self.rows, 'rows_read': len(self.rows), 'total_rows': self.first_page.total_rows, 'all_pages_read': True, 'bytes_processed': self.query_bytes[self.page.query_id], 'estimated_bytes': self.dry_run.bytes_processed, 'sql': self.validated.sql, 'tables': list(self.validated.tables), 'field_corrections': list(dict.fromkeys(self.field_notices)), 'query_parameters': list(self.query_parameters), 'metric_key': self.action.get('metric_key', ''), 'result_role': self.role}
+                    self.tool_result = {'action': 'query_page', 'query_id': self.page.query_id, 'job_id': getattr(self.first_page, 'job_id', ''), 'job_project': getattr(self.first_page, 'job_project', ''), 'location': getattr(self.first_page, 'location', ''), 'columns': list(self.first_page.columns), 'column_types': dict(getattr(self.first_page, 'column_types', {}) or {}), 'rows': self.rows, 'rows_read': len(self.rows), 'total_rows': self.first_page.total_rows, 'all_pages_read': True, 'bytes_processed': self.query_bytes[self.page.query_id], 'estimated_bytes': self.dry_run.bytes_processed, 'sql': self.validated.sql, 'tables': list(self.validated.tables), 'field_corrections': list(dict.fromkeys(self.field_notices)), 'query_parameters': list(self.query_parameters), 'metric_key': self.action.get('metric_key', ''), 'result_role': self.role, 'analysis': self.compiled_analysis.spec.to_dict() if self.compiled_analysis else {}}
                     if self.compiled_analysis is not None:
-                        self.answer_text, self.summary, self.notes = analysis_presentation(self.query_data[self.page.query_id], self.compiled_analysis)
-                        self.status = 'partial' if self.compiled_analysis.unavailable else 'complete'
-                        if self.completeness_warning:
-                            self.status = 'partial'
-                            self.notes = (*self.notes, self.completeness_warning)
-                            self.answer_text += '\n\n**Resultado parcial.** No se recibieron todas las filas informadas por BigQuery.'
-                        if re.search('\\b(?:excel|xlsx)\\b', self.question, re.I):
-                            try:
-                                self.export_rows = [{self.summary.column_labels.get(key, key): value for key, value in row.items()} for row in self.summary.rows]
-                                self.path = self.export_results([{'query_id': self.page.query_id, 'columns': [self.summary.column_labels.get(key, key) for key in self.summary.columns], 'rows': self.export_rows, 'sql': self.validated.sql, 'tables': self.validated.tables, 'title': self.summary.title}], title=self.question[:120], export_dir=self.agent.settings.export_dir, timezone_name=self.agent.settings.timezone)
-                                self.artifacts.append({'type': 'excel', 'path': str(self.path), 'name': self.path.name, 'query_ids': [self.page.query_id], 'row_count': len(self.summary.rows)})
-                            except Exception as export_error:
-                                self.status = 'partial'
-                                self.notes = (*self.notes, f'Los datos se calcularon, pero no se pudo crear el Excel ({type(export_error).__name__}).')
-                        self.sequence += 1
-                        if self.session_store is not None:
-                            self.session_store.log_action(self.turn_id, self.sequence, 'run_analysis', self.action, self.tool_result, aggregate=True)
-                            self.session_store.complete_turn(self.turn_id, self.answer_text, self.notes, asdict(self.summary), status=self.status)
-                            if self.active_analysis:
-                                self.session_store.set_analysis_state(self.session_id, self.active_analysis)
-                            try:
-                                self.session_store.queue_learning_review(self.turn_id, question=self.question, prior_context=self.retrieved_memory, plan={**self.analysis_plan, 'analysis': self.compiled_analysis.spec.to_dict()}, answer=self.answer_text, action_history=[*self.action_history, self.tool_result], verified=self.status == 'complete', active_learnings=self.session_store.learning_context(self.question))
-                            except Exception as learning_error:
-                                self.progress(f'No se pudo encolar el aprendizaje ({type(learning_error).__name__}).')
-                        return AgentAnswer(self.answer_text, assumptions=tuple(dict.fromkeys([*self.notes, *self.field_notices])), summary_table=self.summary, query_count=self.query_count, tables_used=tuple(sorted(self.tables_used)), bytes_processed=self.bytes_processed, usage=self.total_usage, session_id=self.session_id, query_jobs=tuple(self.query_jobs.values()), status=self.status, audit=self.agent._audit_records(self.query_sql, self.query_tables, self.query_jobs, self.query_bytes, self.query_parameter_values), timings={**self.stage_timings, 'total': time.perf_counter() - self.turn_started}, turn_id=self.turn_id, artifacts=tuple(self.artifacts))
+                        self.pending_financial = (self.compiled_analysis, self.page.query_id,
+                                                  self.tool_result, self.completeness_warning)
+                        if self.defer_financial_review:
+                            return None
+                        return self.finish_financial()
                 else:
                     self.requested_query_id = self.action['query_id']
                     if self.requested_query_id in self.query_data and self.requested_query_id not in self.pending_queries:
@@ -936,6 +1040,7 @@ class TurnRuntime:
             self.last_tool_result = self.agent._model_tool_result(self.tool_result)
         except PendingCutoffError as exc:
             if self.session_store is not None:
+                self.session_store.log_action(self.turn_id, self.sequence + 1, 'analysis_pending', {}, {'analysis': self.active_analysis, 'reason': str(exc)})
                 self.session_store.complete_turn(self.turn_id, str(exc), status='partial')
             return AgentAnswer(str(exc), status='partial', session_id=self.session_id, turn_id=self.turn_id)
         except DateScopeRequired as exc:

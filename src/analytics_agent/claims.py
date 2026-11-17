@@ -14,6 +14,7 @@ from .semantics import MetricDefinitionError
 CLAIM_METRICS = {
     "pagos_siniestros", "reservas_avisadas", "avisos_recobro",
     "avisados_salvamentos", "honorarios", "indemnizaciones",
+    "incurrido_siniestros", "variacion_reservas", "reservas_anteriores",
 }
 
 
@@ -45,7 +46,10 @@ def requested_claim_metrics(question: str) -> set[str]:
         "reservas_avisadas": r"\breservas?\b|\bavisado\b(?! de (?:salvamento|recobro))",
         "pagos_siniestros": r"\bpag(?:o|os|ado|ados|ada|adas)\b",
     }
-    found = {key for key, pattern in patterns.items() if re.search(pattern, text)}
+    from .analysis_context import requested_metrics
+    found = (set(requested_metrics(question)) & CLAIM_METRICS) | {
+        key for key, pattern in patterns.items() if re.search(pattern, text)
+    }
     if found & {"honorarios", "indemnizaciones"}:
         found.discard("pagos_siniestros")
     return found
@@ -65,20 +69,19 @@ def requested_payment_class(question: str) -> str:
 def enforce_compiled_claims(sql: str, question: str, metric_key: str = "") -> None:
     """Amount aggregations for confirmed claims must use the compiler, not arbitrary SQL.
 
-    DISTINCT/COUNT, metadata probes and detail queries remain available. Explicit
-    net analyses have no confirmed mapping here and must not inherit gross rules.
+    DISTINCT/COUNT, metadata probes and detail queries remain available.
     """
     keys = requested_claim_metrics(question)
     if metric_key in CLAIM_METRICS:
         keys.add(metric_key)
-    if not keys or (TABLE_IDS["mm_final"] in question and TABLE_IDS["mm_final_netos"] not in question):
+    if not keys:
         return
     expression = parse_one(sql, read="bigquery")
     claims_sources = {TABLE_IDS["mm_final"], TABLE_IDS["mm_final_netos"]}
     if not any(".".join((t.catalog, t.db, t.name)).lower() in claims_sources for t in expression.find_all(exp.Table)):
         return
     amounts = {"incurrido_total", "incurrido", "incurrido_neto", "pago", "pago_neto",
-               "pago_moneda_local", "pago_moneda_estim", "reserva_actual", "reserva_anterior",
+               "pago_gross", "pago_moneda_local", "pago_moneda_estim", "reserva_actual", "reserva_anterior",
                "reserva_gross", "reserva_actual_neto", "variacion", "variacion_neto"}
     amount_aggregation = any(isinstance(node, (exp.Sum, exp.Avg)) for node in expression.walk())
     amount_aggregation = amount_aggregation or any(
@@ -87,10 +90,10 @@ def enforce_compiled_claims(sql: str, question: str, metric_key: str = "") -> No
     )
     if amount_aggregation:
         raise MetricDefinitionError(
-            "Este cálculo tiene una regla confirmada. Usa run_metric con metric_key "
+            "Este cálculo tiene una regla confirmada. Usa run_analysis (o run_metric) con metric_key "
             + ", ".join(sorted(keys))
             + ", start_date, end_date, group_by y filters. El compilador aplica pago_gross o pago_neto y la fecha solicitada; "
-            "no intentes otra fórmula en run_select. Usa SELECT DISTINCT para explorar clases."
+            "no intentes otra fórmula en run_select. Usa SELECT DISTINCT para explorar categorías."
         )
 
 

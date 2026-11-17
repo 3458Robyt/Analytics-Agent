@@ -72,78 +72,28 @@
       "expect_detail_rows": true
     },
     {
-      "id": "pagos_septiembre_por_fecha_accidente",
-      "question": "Calcula el total de pagos de septiembre de 2026.",
-      "table_id": "centralizacion-datos.analytics_curated.mm_final",
+      "id": "pagos_septiembre_por_fecha_pago",
+      "question": "Calcula el total de pagos brutos de septiembre de 2026.",
+      "table_id": "centralizacion-datos.analytics_curated.mm_final_netos",
       "source_schema": {
-        "incurrido_total": "FLOAT64",
-        "tipo": "STRING",
+        "pago_gross": "FLOAT64",
+        "pago_neto": "FLOAT64",
         "fecha_pago": "TIMESTAMP",
-        "mes_mmalla": "TIMESTAMP",
-        "clase_pago": "STRING",
-        "fecha_accidente": "TIMESTAMP"
+        "fecha_accidente": "TIMESTAMP",
+        "cod_estimacion": "STRING"
       },
-      "required_sql_fragments": [
-        "SUM(incurrido_total)",
-        "fecha_accidente",
-        "LOWER(TRIM(tipo))",
-        "2026-09-01",
-        "2026-10-01"
-      ],
-      "forbidden_sql_fragments": [
-        "SUM(pago_moneda_local)",
-        "mes_mmalla >=",
-        "ABS(",
-        "LIMIT"
-      ],
-      "required_parameters": {
-        "metric_filter_0": "pagos"
-      },
-      "result_columns": [
-        "pagos_siniestros"
-      ],
-      "result_rows": [
-        {
-          "pagos_siniestros": 155
-        }
-      ],
+      "required_sql_fragments": ["SUM(pago_gross)", "fecha_pago", "2026-09-01", "2026-10-01"],
+      "forbidden_sql_fragments": ["incurrido_total", "fecha_accidente", "cod_tipo", "LIMIT"],
+      "result_columns": ["pagos_siniestros"],
+      "result_rows": [{"pagos_siniestros": 155}],
       "expect_detail_rows": false
     },
     {
-      "id": "reservas_suma_varios_meses",
-      "question": "Calcula las reservas avisadas de septiembre y octubre de 2026, sumando ambos meses.",
-      "table_id": "centralizacion-datos.analytics_curated.mm_final",
-      "source_schema": {
-        "incurrido_total": "FLOAT64",
-        "tipo": "STRING",
-        "fecha_pago": "TIMESTAMP",
-        "mes_mmalla": "TIMESTAMP"
-      },
-      "required_sql_fragments": [
-        "SUM(incurrido_total)",
-        "mes_mmalla",
-        "LOWER(TRIM(tipo))",
-        "2026-09-01",
-        "2026-11-01"
-      ],
-      "forbidden_sql_fragments": [
-        "MAX(mes_mmalla)",
-        "fecha_pago >=",
-        "ABS(",
-        "LIMIT"
-      ],
-      "required_parameters": {
-        "metric_filter_0": "avisado"
-      },
-      "result_columns": [
-        "reservas_avisadas"
-      ],
-      "result_rows": [
-        {
-          "reservas_avisadas": 250
-        }
-      ],
-      "expect_detail_rows": false
+      "id": "reservas_corte_pendiente",
+      "question": "Calcula las reservas avisadas de septiembre y octubre de 2026.",
+      "table_id": "centralizacion-datos.analytics_curated.mm_final_netos",
+      "source_schema": {"reserva_gross": "FLOAT64", "fecha_pago": "TIMESTAMP"},
+      "expect_pending": "corte mensual"
     }
   ]
 }

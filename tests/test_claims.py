@@ -15,22 +15,14 @@ class ClaimsRulesTests(unittest.TestCase):
     def setUp(self):
         self.metrics = load_metric_definitions()
 
-    def test_all_four_categories_compile_distinct_protected_filters(self):
-        for key, label, date in (
-            ("pagos_siniestros", "pagos", "fecha_accidente"),
-            ("reservas_avisadas", "avisado", "mes_mmalla"),
-            ("avisos_recobro", "aviso de recobro", "mes_mmalla"),
-            ("avisados_salvamentos", "avisado de salvamentos", "mes_mmalla"),
-        ):
-            with self.subTest(key=key):
-                query = compile_metric_query(self.metrics[key], start_date="2026-01-01", end_date="2026-07-01")
-                self.assertIn("SUM(`incurrido_total`)", query.sql)
-                self.assertIn(f"`{date}` >=", query.sql)
-                self.assertIn("LOWER(TRIM(`tipo`)) = @metric_filter_0", query.sql)
-                self.assertEqual(label, query.parameters[0]["value"])
-                self.assertNotIn("ABS(", query.sql)
-                self.assertNotIn("DISTINCT", query.sql)
-                self.assertNotIn("LIMIT", query.sql)
+    def test_payments_use_gross_and_reserves_need_reviewed_cutoff(self):
+        query = compile_metric_query(self.metrics["pagos_siniestros"], start_date="2026-01-01", end_date="2026-07-01")
+        self.assertIn("SUM(`pago_gross`)", query.sql)
+        self.assertIn("`fecha_pago` >=", query.sql)
+        self.assertEqual((), query.parameters)
+        for key in ("reservas_avisadas", "avisos_recobro", "avisados_salvamentos"):
+            with self.subTest(key=key), self.assertRaisesRegex(MetricDefinitionError, "corte mensual"):
+                compile_metric_query(self.metrics[key], start_date="2026-01-01", end_date="2026-07-01")
 
     def test_fixed_type_cannot_be_expanded_or_replaced(self):
         for item in (
@@ -40,13 +32,12 @@ class ClaimsRulesTests(unittest.TestCase):
         ):
             with self.subTest(item=item), self.assertRaises(MetricDefinitionError):
                 compile_metric_query(self.metrics["pagos_siniestros"], start_date="2026-09-01", end_date="2026-10-01", filters=[item])
-        query = compile_metric_query(self.metrics["pagos_siniestros"], start_date="2026-09-01", end_date="2026-10-01",
-                                     filters=[{"field": "tipo", "value": "  PAGOS  "}])
-        self.assertEqual(["pagos", "pagos"], [item["value"] for item in query.parameters])
-
     def test_payment_dates_use_business_zone_but_month_labels_stay_in_month(self):
         payment = compile_metric_query(self.metrics["pagos_siniestros"], start_date="2026-09-01", end_date="2026-10-01")
-        reserve = compile_metric_query(self.metrics["reservas_avisadas"], start_date="2026-09-01", end_date="2026-11-01")
+        reserve_rule = {**self.metrics["reservas_avisadas"], "pending_cutoff": False,
+                        "date_field": "mes_cierre", "date_field_type": "TIMESTAMP",
+                        "time_behavior": "closing_month_sum", "date_bases": {}}
+        reserve = compile_metric_query(reserve_rule, start_date="2026-09-01", end_date="2026-11-01")
         self.assertIn("'America/Bogota'", payment.sql)
         self.assertIn("'UTC'", reserve.sql)
         self.assertIn("2026-11-01", reserve.sql)
@@ -62,7 +53,8 @@ class ClaimsRulesTests(unittest.TestCase):
                 enforce_compiled_claims(sql, "Total pagos de septiembre")
         enforce_compiled_claims(f"SELECT DISTINCT clase_pago FROM `{TABLE}`", "Honorarios pagados")
         enforce_compiled_claims(f"SELECT COUNT(*) FROM `{TABLE}`", "Número de pagos")
-        enforce_compiled_claims(f"SELECT SUM(incurrido_neto) FROM `{TABLE}_netos`", "Incurrido neto")
+        with self.assertRaisesRegex(MetricDefinitionError, "incurrido_siniestros"):
+            enforce_compiled_claims(f"SELECT SUM(incurrido_neto) FROM `{TABLE}_netos`", "Incurrido neto")
 
     def test_payment_classes_must_be_observed_and_unambiguous(self):
         labels = [" Honorarios ", "Indemnización", "OTROS"]
@@ -78,9 +70,9 @@ class ClaimsRulesTests(unittest.TestCase):
     def test_inherited_glossary_context_contains_complete_current_rules(self):
         _, entries = load_glossary("reservas avisadas")
         rule = next(item for item in entries if item.get("key") == "reservas_avisadas")
-        self.assertEqual("incurrido_total", rule["value_field"])
-        self.assertEqual("Avisado", rule["required_filters"][0]["value"])
-        self.assertEqual("mes_mmalla", rule["date_field"])
+        self.assertEqual("reserva_gross", rule["value_field"])
+        self.assertEqual([], rule["required_filters"])
+        self.assertTrue(rule["pending_cutoff"])
 
     def test_negated_class_name_is_not_misread_as_confirmation(self):
         labels = ["Honorarios ajustador", "Honorarios abogado"]
@@ -100,10 +92,10 @@ class FieldResolutionTests(unittest.TestCase):
         self.catalog = SchemaCatalog({TABLE: self.table})
 
     def test_corrects_verified_alias_or_clear_typo_and_reports_it(self):
-        sql, notices = resolve_sql_fields(f"SELECT ramo, incurrido_totall FROM `{TABLE}`", self.catalog)
+        sql, notices = resolve_sql_fields(f"SELECT ramo_comercial, incurrido_totall FROM `{TABLE}`", self.catalog, allow_typo=True)
         self.assertIn("ramo_comercial", sql)
         self.assertIn("incurrido_total", sql)
-        self.assertEqual(2, len(notices))
+        self.assertEqual(1, len(notices))
 
     def test_ambiguous_or_invented_field_is_not_silently_replaced(self):
         for field in ("fecha", "valor_imaginario"):

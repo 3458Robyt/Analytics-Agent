@@ -78,8 +78,8 @@ class EvaluationTests(unittest.TestCase):
 
     def test_claims_cases_accept_compiled_sql_and_verify_fixed_parameters(self):
         for key, start, end, case_id in (
-            ("pagos_siniestros", "2026-09-01", "2026-10-01", "pagos_septiembre_por_fecha_accidente"),
-            ("reservas_avisadas", "2026-09-01", "2026-11-01", "reservas_suma_varios_meses"),
+            ("pagos_siniestros", "2026-09-01", "2026-10-01", "pagos_septiembre_por_fecha_pago"),
+            ("reservas_avisadas", "2026-09-01", "2026-11-01", "reservas_corte_pendiente"),
         ):
             case = next(item for item in self.cases if item["id"] == case_id)
             llm = StubLLM([action("run_metric", metric_key=key, start_date=start, end_date=end, group_by=[], filters=[]),

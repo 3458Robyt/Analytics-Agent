@@ -21,6 +21,17 @@ def number(value: Any, *, percent: bool = False) -> str:
     return rendered + (" %" if percent else "")
 
 
+def metric_label(key: str, compiled: CompiledAnalysis) -> str:
+    title = LABELS.get(key, key)
+    if key == "honorarios":
+        title = "Honorarios y gastos"
+    if key in {"pagos_siniestros", "indemnizaciones", "honorarios", "reservas_avisadas",
+               "reservas_anteriores", "incurrido_siniestros", "variacion_reservas"}:
+        basis = compiled.spec.metric_bases.get(key, compiled.spec.amount_basis)
+        title += " · neto" if basis == "net" else " · bruto"
+    return title
+
+
 def with_totals(rows, columns, compiled):
     if not compiled.spec.group_by or not rows:
         return rows
@@ -65,12 +76,15 @@ def analysis_presentation(result: Mapping[str, Any], compiled: CompiledAnalysis
     formats = {column: "percent" if column.startswith("siniestralidad_") else "amount"
                for column in columns if column in LABELS and column not in {"mes", "vicepresidencia", "linea_mayor", "linea_menor", "nombre_lob_mor", "cod_subprofit_loc", "ramo", "sucursal"}}
     table = SummaryTable("Resumen del análisis", columns, tuple({column: row.get(column) for column in columns} for row in with_totals(rows, columns, compiled)),
-                         tuple(formats), {column: LABELS.get(column, column.replace("_", " ").capitalize()) for column in columns}, formats)
+                         tuple(formats), {column: metric_label(column, compiled) if column in LABELS else column.replace("_", " ").capitalize() for column in columns}, formats)
     notes = list(compiled.spec.assumptions)
     if compiled.spec.population:
         notes.append(f"Clasificación utilizada: {compiled.spec.population['label']} ({compiled.spec.population['level'].replace('_', ' ')}).")
     if any(key in compiled.components for key in ("pagos_siniestros", "honorarios", "indemnizaciones")):
-        notes.append("Pagos por fecha de pago." if compiled.spec.payment_date_basis == "payment" else "Pagos por fecha de accidente.")
+        for key in ("pagos_siniestros", "honorarios", "indemnizaciones"):
+            if key in compiled.components:
+                basis = compiled.spec.metric_dates.get(key, compiled.spec.payment_date_basis)
+                notes.append(f"{metric_label(key, compiled)} por fecha de {'pago' if basis == 'payment' else 'ocurrencia'}.")
     if not compiled.spec.start_date:
         notes.append("Se consultó todo el histórico disponible.")
     for key in compiled.components:
@@ -78,6 +92,20 @@ def analysis_presentation(result: Mapping[str, Any], compiled: CompiledAnalysis
             notes.append(f"{LABELS[key]}: no se encontraron movimientos para el alcance consultado.")
         elif rows and any(row.get(f"__rows_{key}", 0) > 0 and row.get(f"__values_{key}") == 0 for row in rows):
             notes.append(f"{LABELS[key]}: hay movimientos sin importes informados.")
+    for key in compiled.components:
+        zero_rows = [row for row in rows if row.get(key) is not None and Decimal(str(row[key])) == 0
+                     and row.get(f"__values_{key}", 0)]
+        if not zero_rows:
+            continue
+        zeros = sum(row.get(f"__zero_{key}", 0) for row in zero_rows)
+        positives = sum(row.get(f"__positive_{key}", 0) for row in zero_rows)
+        negatives = sum(row.get(f"__negative_{key}", 0) for row in zero_rows)
+        if positives or negatives:
+            notes.append(f"{metric_label(key, compiled)}: en los grupos con suma cero hubo "
+                         f"{positives} importes positivos, {negatives} negativos y {zeros} iguales a cero.")
+        elif zeros:
+            notes.append(f"{metric_label(key, compiled)}: los {zeros} importes informados "
+                         "en los grupos con suma cero eran iguales a cero.")
     for ratio in (key for key in compiled.requested if key.startswith("siniestralidad_")):
         denominator = "prima_emitida" if ratio.endswith("_emitida") else "prima_devengada"
         if any(row.get(denominator) is not None and Decimal(str(row[denominator])) == 0 for row in rows):
@@ -88,11 +116,17 @@ def analysis_presentation(result: Mapping[str, Any], compiled: CompiledAnalysis
         for key in columns:
             if key in formats:
                 value = number(row.get(key), percent=formats[key] == "percent")
-                facts.append(f"**{LABELS.get(key, key)}:** {value}")
+                facts.append(f"**{metric_label(key, compiled)}:** {value}")
         answer = "; ".join(facts) + "." if facts else "No se encontraron importes para el análisis solicitado."
     elif rows:
         scope = compiled.spec.population.get("label", "el alcance solicitado")
         answer = f"El cuadro muestra {', '.join(LABELS.get(key, key).lower() for key in compiled.requested)} para {scope}."
+        totals = [row for row in table.rows if "Total general" in row.values()]
+        if totals:
+            amounts = [f"{metric_label(key, compiled)}: **{number(totals[0].get(key), percent=formats[key] == 'percent')}**"
+                       for key in compiled.requested if key in formats]
+            if amounts:
+                answer += " Total general de " + ", ".join(amounts) + "."
         # Summarize an actual observed row, without averaging percentages or
         # turning absent components into zero in a new total.
         primary = next((key for key in compiled.requested if key in formats and formats[key] == "amount"), None)
@@ -150,7 +184,10 @@ def comparison_presentation(rows, columns, compiled):
     if compiled.spec.population:
         notes.append(f"Clasificación utilizada: {compiled.spec.population['label']}.")
     if any(key in compiled.components for key in ("pagos_siniestros", "honorarios", "indemnizaciones")):
-        notes.append("Pagos por fecha de pago." if compiled.spec.payment_date_basis == "payment" else "Pagos por fecha de accidente.")
+        for key in ("pagos_siniestros", "honorarios", "indemnizaciones"):
+            if key in compiled.components:
+                basis = compiled.spec.metric_dates.get(key, compiled.spec.payment_date_basis)
+                notes.append(f"{metric_label(key, compiled)} por fecha de {'pago' if basis == 'payment' else 'ocurrencia'}.")
     if compiled.unavailable:
         answer += "\n\n**Resultado parcial.** No pude completar: " + "; ".join(compiled.unavailable) + "."
     return answer, table, tuple(notes)

@@ -389,12 +389,6 @@
         "cod_sucursal": {
           "alias": "codigo_sucursal"
         },
-        "clase_pago": {
-          "alias": "clase_pago"
-        },
-        "tipo": {
-          "alias": "tipo"
-        },
         "lob_l1": {
           "alias": "vicepresidencia"
         },
@@ -418,21 +412,6 @@
         }
       },
       "filter_fields": {
-        "tipo": {
-          "type": "STRING",
-          "operators": [
-            "eq",
-            "in"
-          ],
-          "normalize": "lower_trim"
-        },
-        "clase_pago": {
-          "type": "STRING",
-          "operators": [
-            "eq",
-            "in"
-          ]
-        },
         "ramo_comercial": {
           "type": "STRING",
           "operators": [
@@ -497,7 +476,7 @@
         }
       },
       "movement_policy": "Sumar todas las filas seleccionadas conservando los signos, sin deduplicar ni netear otras categorías.",
-      "unit": "Conservar la unidad de incurrido_total; no afirmar moneda ni base neta sin evidencia.",
+      "unit": "Conservar la unidad del campo de pago seleccionado; no afirmar moneda sin evidencia.",
       "source": "Aclaración del equipo confirmada por el usuario, noviembre de 2026",
       "validated_by": "user",
       "date_bases": {
@@ -539,12 +518,6 @@
         "cod_sucursal": {
           "alias": "codigo_sucursal"
         },
-        "clase_pago": {
-          "alias": "clase_pago"
-        },
-        "tipo": {
-          "alias": "tipo"
-        },
         "lob_l1": {
           "alias": "vicepresidencia"
         },
@@ -568,21 +541,6 @@
         }
       },
       "filter_fields": {
-        "tipo": {
-          "type": "STRING",
-          "operators": [
-            "eq",
-            "in"
-          ],
-          "normalize": "lower_trim"
-        },
-        "clase_pago": {
-          "type": "STRING",
-          "operators": [
-            "eq",
-            "in"
-          ]
-        },
         "ramo_comercial": {
           "type": "STRING",
           "operators": [
@@ -685,12 +643,6 @@
         "cod_sucursal": {
           "alias": "codigo_sucursal"
         },
-        "clase_pago": {
-          "alias": "clase_pago"
-        },
-        "tipo": {
-          "alias": "tipo"
-        },
         "lob_l1": {
           "alias": "vicepresidencia"
         },
@@ -714,21 +666,6 @@
         }
       },
       "filter_fields": {
-        "tipo": {
-          "type": "STRING",
-          "operators": [
-            "eq",
-            "in"
-          ],
-          "normalize": "lower_trim"
-        },
-        "clase_pago": {
-          "type": "STRING",
-          "operators": [
-            "eq",
-            "in"
-          ]
-        },
         "ramo_comercial": {
           "type": "STRING",
           "operators": [
@@ -840,12 +777,6 @@
         "cod_sucursal": {
           "alias": "codigo_sucursal"
         },
-        "clase_pago": {
-          "alias": "clase_pago"
-        },
-        "tipo": {
-          "alias": "tipo"
-        },
         "lob_l1": {
           "alias": "vicepresidencia"
         },
@@ -869,21 +800,6 @@
         }
       },
       "filter_fields": {
-        "tipo": {
-          "type": "STRING",
-          "operators": [
-            "eq",
-            "in"
-          ],
-          "normalize": "lower_trim"
-        },
-        "clase_pago": {
-          "type": "STRING",
-          "operators": [
-            "eq",
-            "in"
-          ]
-        },
         "ramo_comercial": {
           "type": "STRING",
           "operators": [
@@ -994,12 +910,6 @@
         "cod_sucursal": {
           "alias": "codigo_sucursal"
         },
-        "clase_pago": {
-          "alias": "clase_pago"
-        },
-        "tipo": {
-          "alias": "tipo"
-        },
         "lob_l1": {
           "alias": "vicepresidencia"
         },
@@ -1023,21 +933,6 @@
         }
       },
       "filter_fields": {
-        "tipo": {
-          "type": "STRING",
-          "operators": [
-            "eq",
-            "in"
-          ],
-          "normalize": "lower_trim"
-        },
-        "clase_pago": {
-          "type": "STRING",
-          "operators": [
-            "eq",
-            "in"
-          ]
-        },
         "ramo_comercial": {
           "type": "STRING",
           "operators": [
@@ -1150,12 +1045,6 @@
         "cod_sucursal": {
           "alias": "codigo_sucursal"
         },
-        "clase_pago": {
-          "alias": "clase_pago"
-        },
-        "tipo": {
-          "alias": "tipo"
-        },
         "lob_l1": {
           "alias": "vicepresidencia"
         },
@@ -1179,21 +1068,6 @@
         }
       },
       "filter_fields": {
-        "tipo": {
-          "type": "STRING",
-          "operators": [
-            "eq",
-            "in"
-          ],
-          "normalize": "lower_trim"
-        },
-        "clase_pago": {
-          "type": "STRING",
-          "operators": [
-            "eq",
-            "in"
-          ]
-        },
         "ramo_comercial": {
           "type": "STRING",
           "operators": [
@@ -1368,12 +1242,6 @@
         "cod_sucursal": {
           "alias": "codigo_sucursal"
         },
-        "clase_pago": {
-          "alias": "clase_pago"
-        },
-        "tipo": {
-          "alias": "tipo"
-        },
         "lob_l1": {
           "alias": "vicepresidencia"
         },
@@ -1397,21 +1265,6 @@
         }
       },
       "filter_fields": {
-        "tipo": {
-          "type": "STRING",
-          "operators": [
-            "eq",
-            "in"
-          ],
-          "normalize": "lower_trim"
-        },
-        "clase_pago": {
-          "type": "STRING",
-          "operators": [
-            "eq",
-            "in"
-          ]
-        },
         "ramo_comercial": {
           "type": "STRING",
           "operators": [
@@ -1523,12 +1376,6 @@
         "cod_sucursal": {
           "alias": "codigo_sucursal"
         },
-        "clase_pago": {
-          "alias": "clase_pago"
-        },
-        "tipo": {
-          "alias": "tipo"
-        },
         "lob_l1": {
           "alias": "vicepresidencia"
         },
@@ -1552,21 +1399,6 @@
         }
       },
       "filter_fields": {
-        "tipo": {
-          "type": "STRING",
-          "operators": [
-            "eq",
-            "in"
-          ],
-          "normalize": "lower_trim"
-        },
-        "clase_pago": {
-          "type": "STRING",
-          "operators": [
-            "eq",
-            "in"
-          ]
-        },
         "ramo_comercial": {
           "type": "STRING",
           "operators": [
@@ -1680,12 +1512,6 @@
         "cod_sucursal": {
           "alias": "codigo_sucursal"
         },
-        "clase_pago": {
-          "alias": "clase_pago"
-        },
-        "tipo": {
-          "alias": "tipo"
-        },
         "lob_l1": {
           "alias": "vicepresidencia"
         },
@@ -1709,21 +1535,6 @@
         }
       },
       "filter_fields": {
-        "tipo": {
-          "type": "STRING",
-          "operators": [
-            "eq",
-            "in"
-          ],
-          "normalize": "lower_trim"
-        },
-        "clase_pago": {
-          "type": "STRING",
-          "operators": [
-            "eq",
-            "in"
-          ]
-        },
         "ramo_comercial": {
           "type": "STRING",
           "operators": [

@@ -19,8 +19,11 @@ from .schema import ColumnSchema, TableSchema
 from .text_encoding import dumps_json, repair_text
 from .bigquery_adapter import QueryPage, current_request_id
 from .graph_query import collect_prepared_query
+from .analysis_context import AnalysisSpec
+from .analysis_sql import CompiledAnalysis
+from .semantics import MetricQuery
 
-_TYPES = {cls.__name__: cls for cls in (AgentAnswer, Clarification, SummaryTable, ColumnSchema, TableSchema)}
+_TYPES = {cls.__name__: cls for cls in (AgentAnswer, Clarification, SummaryTable, ColumnSchema, TableSchema, AnalysisSpec, CompiledAnalysis, MetricQuery)}
 
 
 class DurableOperationError(BaseException):
@@ -132,11 +135,12 @@ class State(TypedDict, total=False):
     index: int
     done: bool
     action: str
+    verify: bool
 
 
 def versions(agent):
     from .llm import load_default_agent_system_prompt
-    return {'graph': 2, 'model': agent.settings.llm_model,
+    return {'graph': 3, 'model': agent.settings.llm_model,
             'prompt': agent._fingerprint(getattr(agent.llm, 'agent_system_prompt', '') or load_default_agent_system_prompt()),
             'glossary': agent._fingerprint(agent.metric_definitions),
             'organization': agent._fingerprint(vars(agent.organization))}
@@ -301,6 +305,7 @@ def execute(runtime, *, run_id=''):
                     answer = payloads.get(f'pending:{index}')
                 else:
                     try:
+                        runtime.defer_financial_review = True
                         answer = runtime.perform()
                     finally:
                         runtime.on_clarification = original_callback
@@ -318,15 +323,26 @@ def execute(runtime, *, run_id=''):
                     answer = replace(answer, run_id=run_id, engine='langgraph')
                     payloads.put('answer', answer, commit=False)
                 ref = save(f'after:{index}', commit=False)
-                result = {'ref': ref, 'done': answer is not None}
+                result = {'ref': ref, 'done': answer is not None, 'verify': runtime.pending_financial is not None}
                 payloads.put(receipt, result)
                 return result
 
+            def verify_financial(state):
+                restore(state["ref"])
+                store.update(run_id, token, status="running", stage="verify_financial")
+                runtime.graph_run_id, runtime.graph_action_index = run_id, state["index"]
+                if payloads.get("answer") is None:
+                    answer = replace(runtime.finish_financial(), run_id=run_id, engine="langgraph")
+                    payloads.put("answer", answer)
+                return {"done": True}
+
             graph = StateGraph(State)
+            graph.add_node("verify_financial", verify_financial)
+            graph.add_edge("verify_financial", END)
             graph.add_node('decide', decide)
             for node in ('query', 'tool', 'review', 'clarify'):
                 graph.add_node(node, perform)
-                graph.add_conditional_edges(node, lambda s: END if s['done'] else 'decide')
+                graph.add_conditional_edges(node, lambda s: END if s['done'] else 'verify_financial' if s['verify'] else 'decide')
             graph.add_edge(START, 'decide')
             graph.add_conditional_edges('decide', lambda s: END if s['done'] else
                 'query' if s['action'] in {'run_select', 'run_metric', 'run_analysis', 'read_page'} else
