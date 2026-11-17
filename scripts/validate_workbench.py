@@ -36,7 +36,7 @@ class ValidationBudgetExceeded(RuntimeError):
 class BudgetClient:
     def __init__(self, client, limit):
         self.client, self.limit, self.reserved = client, limit, 0
-        self.jobs = set()
+        self.job_limits = {}
 
     def __getattr__(self, name):
         return getattr(self.client, name)
@@ -48,7 +48,7 @@ class BudgetClient:
             raise ValueError('La validación requiere GoogleSQL de solo lectura')
         if not cfg.dry_run:
             identity = kwargs.get('job_id')
-            if not identity or identity not in self.jobs:
+            if not identity or identity not in self.job_limits:
                 estimate_config = copy.deepcopy(cfg)
                 estimate_config.dry_run, estimate_config.use_query_cache = True, False
                 estimated = self.client.query(sql, job_config=estimate_config,
@@ -58,7 +58,9 @@ class BudgetClient:
                 cfg.maximum_bytes_billed = min(cfg.maximum_bytes_billed or self.limit, self.limit - self.reserved)
                 self.reserved += estimated
                 if identity:
-                    self.jobs.add(identity)
+                    self.job_limits[identity] = cfg.maximum_bytes_billed
+            else:
+                cfg.maximum_bytes_billed = self.job_limits[identity]
         if kwargs.get('job_id'):
             kwargs.setdefault('job_retry', None)
         return self.client.query(sql, job_config=cfg, **kwargs)
@@ -237,7 +239,8 @@ def check_answer(name, answer, memory, session):
     if name in pending and 'corte' not in answer.answer.casefold():
         raise AssertionError('Falta indicar el corte pendiente')
     if name in {'incurrido_neto', 'aclaracion_fecha_pago'}:
-        intent = memory.get_analysis_intent(session) or {}
+        get_intent = getattr(memory, 'get_analysis_intent', None)
+        intent = (get_intent(session) or {}) if get_intent else {}
         if intent.get('metric_bases', {}).get('incurrido_siniestros') != 'net':
             raise AssertionError('El seguimiento debe conservar la base neta')
     if name in {'pagos_septiembre', 'pagos_octubre_por_ramo', 'total_sin_desglose',

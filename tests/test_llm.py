@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from analytics_agent.llm import Completion, OpenAICompatibleProvider
+from analytics_agent.llm import Completion, LLMError, OpenAICompatibleProvider
 
 
 class FakeResponse:
@@ -64,6 +64,17 @@ class LLMProviderTests(unittest.TestCase):
         self.assertEqual(9, usage["total_tokens"])
         self.assertIn("usa todos los movimientos", provider.messages[1]["content"])
         self.assertIn("search_tables", provider.messages[1]["content"])
+
+    def test_half_month_comparison_uses_compiler_grain(self):
+        class StubProvider(OpenAICompatibleProvider):
+            def complete(self, messages, *, max_tokens=1200):
+                return Completion('{"action":"run_analysis","time_grain":"fortnight"}', {})
+
+        provider = StubProvider(base_url="https://llm.example/v1", model="m", api_key="k")
+        result, _ = provider.next_action("Compara las dos quincenas de octubre")
+        self.assertEqual(result["time_grain"], "total")
+        with self.assertRaisesRegex(LLMError, "time_grain"):
+            provider.next_action("Muestra una serie semanal de primas")
 
     def test_responses_api_keeps_storage_disabled(self):
         seen = {}

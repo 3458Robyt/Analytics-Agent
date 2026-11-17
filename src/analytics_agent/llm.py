@@ -319,8 +319,12 @@ class OpenAICompatibleProvider:
             if action == "run_analysis":
                 if not isinstance(result["metric_keys"], list) or not all(isinstance(key, str) for key in result["metric_keys"]):
                     raise LLMError("`metric_keys` debe ser una lista de métricas")
-                if result["time_grain"] not in {"total", "month"}:
-                    raise LLMError("`time_grain` debe ser total o month")
+                grain = result["time_grain"]
+                if not isinstance(grain, str) or grain not in {"total", "month"}:
+                    if not re.search(r"\b(?:compara\w*|variaci[oó]n)\b", question, re.I) or "quincena" not in question.casefold():
+                        raise LLMError("`time_grain` debe ser total o month")
+                    # The compiler derives the two half-month periods from the question.
+                    result["time_grain"] = "total"
                 if not isinstance(result["population"], dict):
                     raise LLMError("`population` debe ser un objeto")
             if bool(result["start_date"].strip()) != bool(result["end_date"].strip()):

@@ -25,6 +25,7 @@ class WorkbenchValidationTests(unittest.TestCase):
         budget.query('SELECT 1', job_id='stable')
         budget.query('SELECT 1', job_id='stable')
         self.assertEqual(budget.reserved, 60)
+        self.assertEqual(client.query.call_args.kwargs["job_config"].maximum_bytes_billed, 100)
         self.assertEqual(client.query.call_count, 3)
         with self.assertRaises(ValidationBudgetExceeded):
             budget.query('SELECT 2')
