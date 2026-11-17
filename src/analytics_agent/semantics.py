@@ -154,6 +154,8 @@ def compile_metric_query(
     if not isinstance(required, (list, tuple)) or not all(isinstance(item, Mapping) for item in required):
         raise MetricDefinitionError("Los filtros obligatorios de la métrica no son válidos")
     for item in filters:
+        if isinstance(item, Mapping) and table_id.endswith(".mm_final_netos") and item.get("field") in {"tipo", "cod_tipo", "clase_pago"}:
+            raise MetricDefinitionError("mm_final_netos usa cod_estimacion para categorías y no usa tipo ni cod_tipo")
         if not isinstance(item, Mapping):
             raise MetricDefinitionError("Cada filtro debe incluir campo, operador y valor")
         for fixed in required:

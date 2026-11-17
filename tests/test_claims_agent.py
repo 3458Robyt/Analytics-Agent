@@ -15,7 +15,7 @@ from analytics_agent.schema import SchemaCatalog
 from tests.test_agent import StubLLM, action
 
 
-TABLE = "centralizacion-datos.analytics_curated.mm_final"
+TABLE = "centralizacion-datos.analytics_curated.mm_final_netos"
 
 
 class ClaimsBigQuery:
@@ -24,7 +24,7 @@ class ClaimsBigQuery:
     def __init__(self):
         self.db = sqlite3.connect(":memory:")
         self.db.row_factory = sqlite3.Row
-        self.db.execute("CREATE TABLE claims(tipo TEXT, clase_pago TEXT, incurrido_total REAL, fecha_pago TEXT, mes_mmalla TEXT, ramo_comercial TEXT, pago_moneda_local REAL, fecha_accidente TEXT)")
+        self.db.execute("CREATE TABLE claims(tipo TEXT, cod_estimacion TEXT, incurrido_total REAL, fecha_pago TEXT, mes_mmalla TEXT, ramo_comercial TEXT, pago_moneda_local REAL, fecha_accidente TEXT)")
         def row(kind, cls, amount, paid=None, month="2026-09-01T00:00:00+00:00"):
             return (kind, cls, amount, paid, month, "AUTOS", 99999, paid)
         self.db.executemany("INSERT INTO claims VALUES(?,?,?,?,?,?,?,?)", [
@@ -40,6 +40,12 @@ class ClaimsBigQuery:
             row("aviso de recobro", None, -12),
             row("avisado de salvamentos", None, -6),
         ])
+        for name in ("pago_gross", "reserva_gross", "recobro", "salvamentos"):
+            self.db.execute(f"ALTER TABLE claims ADD COLUMN {name} REAL")
+        for name, category in (("pago_gross", "pagos"), ("reserva_gross", "avisado"),
+                               ("recobro", "aviso de recobro"), ("salvamentos", "avisado de salvamentos")):
+            self.db.execute(f"UPDATE claims SET {name}=incurrido_total WHERE LOWER(TRIM(tipo))=?", (category,))
+        self.db.create_function("DATE", 1, lambda x: x[:10] if x else None)
         self.executed = []
         self.dry_runs = []
         self.metadata_calls = 0
@@ -50,10 +56,11 @@ class ClaimsBigQuery:
         self.metadata_calls += 1
         if self.no_metadata:
             raise RuntimeError("Metadatos no disponibles")
-        kinds = {"tipo": "STRING", "clase_pago": "STRING", "incurrido_total": "FLOAT64",
+        kinds = {"tipo": "STRING", "cod_estimacion": "STRING", "incurrido_total": "FLOAT64",
                  "fecha_pago": "TIMESTAMP", "fecha_accidente": "TIMESTAMP", "mes_mmalla": "TIMESTAMP", "ramo_comercial": "STRING", "pago_moneda_local": "FLOAT64"}
+        kinds.update({name: "FLOAT64" for name in ("pago_gross", "reserva_gross", "recobro", "salvamentos")})
         if self.missing_value_field:
-            kinds.pop("incurrido_total")
+            kinds.pop("pago_gross")
         return {"table_id": table_id, "actual_schema": {k: {"name": k, "data_type": v} for k, v in kinds.items()},
                 "location": self.location, "table_type": "TABLE", "description": "", "view_query": ""}
 
@@ -64,6 +71,11 @@ class ClaimsBigQuery:
             value = datetime.fromisoformat(day).replace(tzinfo=ZoneInfo(zone)).astimezone(timezone.utc)
             return "'" + value.isoformat() + "'"
         local = re.sub(r"TIMESTAMP\(CAST\('([0-9-]+)' AS DATE\), '([^']+)'\)", bound, local)
+        local = re.sub(r"COUNTIF\(([^)]*\)\s*[<=>]\s*0)\)", r"SUM(CASE WHEN \1 THEN 1 ELSE 0 END)", local)
+        local = re.sub(r"CAST\('([0-9-]+)' AS DATE\)", r"'\1'", local)
+        local = re.sub(r"DATE '([0-9-]+)'", r"'\1'", local)
+        local = re.sub(r"DATE\(([^,]+), 'UTC'\)", r"DATE(\1)", local)
+        local = re.sub(r"FORMAT_DATE\('%Y-%m', DATE\(([^)]+)\)\)", r"SUBSTR(\1, 1, 7)", local)
         bindings = {}
         for param in parameters:
             name, value = param["name"], param["value"]
@@ -92,7 +104,7 @@ class ClaimsBigQuery:
         columns = tuple(col[0] for col in cursor.description)
         rows = tuple(dict(row) for row in cursor.fetchall())
         return QueryPage("claim-" + str(len(self.executed)), columns, rows, False, len(rows), 100,
-                         column_types={col: "NUMERIC" if col not in {"clase_pago", "tipo", "ramo", "ramo_comercial"} else "STRING" for col in columns})
+                         column_types={col: "NUMERIC" if col not in {"cod_estimacion", "tipo", "ramo", "ramo_comercial"} else "STRING" for col in columns})
 
     def read_page(self, query_id):
         raise AssertionError("No missing fixture pages")
@@ -115,7 +127,7 @@ class ClaimsAgentTests(unittest.TestCase):
         self.addCleanup(self.bq.db.close)
 
     def test_small_unscoped_metrics_sum_all_history_without_inventing_dates(self):
-        for key, expected in (("pagos_siniestros", 715), ("reservas_avisadas", 250)):
+        for key, expected in (("pagos_siniestros", 715),):
             with self.subTest(key=key):
                 agent, _ = agent_for([metric(key), action("finish", answer="Resultado consultado.")], self.bq)
                 result = agent.answer(f"Total de {key}")
@@ -137,20 +149,29 @@ class ClaimsAgentTests(unittest.TestCase):
         for key, expected in (("pagos_siniestros", 155), ("reservas_avisadas", 200),
                               ("avisos_recobro", -12), ("avisados_salvamentos", -6)):
             with self.subTest(key=key):
-                agent, _ = agent_for([metric(key), action("finish", answer="Resultado consultado.")], self.bq)
+                agent, _ = agent_for([metric(key)], self.bq)
+                if key != "pagos_siniestros":
+                    agent.metric_definitions[key]["claims_period"] = {
+                        "mode": "monthly_closes", "period_field": "mes_mmalla",
+                        "start": "2026-09-01", "end": "2026-11-01",
+                    }
                 result = agent.answer(f"{key} de septiembre de 2026")
                 self.assertEqual(expected, result.summary_table.rows[0][key])
 
-    def test_multimonth_reserves_are_summed_instead_of_last_cut(self):
+    def test_multimonth_reserves_are_reported_as_monthly_balances(self):
         run = metric("reservas_avisadas")
         run["end_date"] = "2026-11-01"
         agent, _ = agent_for([run, action("finish", answer="Reservas consultadas.")], self.bq)
-        result = agent.answer("Reservas de septiembre y octubre")
-        self.assertEqual(250, result.summary_table.rows[0]["reservas_avisadas"])
+        agent.metric_definitions["reservas_avisadas"]["claims_period"] = {
+            "mode": "monthly_closes", "period_field": "mes_mmalla",
+            "start": "2026-09-01", "end": "2026-11-01",
+        }
+        result = agent.answer("Reservas de septiembre y octubre de 2026")
+        self.assertEqual([("2026-09", 200), ("2026-10", 50)],
+                         [(row["mes"], row["reservas_avisadas"]) for row in result.summary_table.rows])
 
     def test_honorarios_and_indemnizaciones_are_subsets_and_discovery_is_cached(self):
-        agent, _ = agent_for([metric("honorarios"), action("finish", answer="Honorarios consultados."),
-                              metric("indemnizaciones"), action("finish", answer="Indemnizaciones consultadas.")], self.bq)
+        agent, _ = agent_for([metric("honorarios"), metric("indemnizaciones")], self.bq)
         first = agent.answer("Honorarios de septiembre")
         second = agent.answer("Indemnizaciones de septiembre")
         self.assertEqual(20, first.summary_table.rows[0]["honorarios"])
@@ -178,7 +199,7 @@ class ClaimsAgentTests(unittest.TestCase):
         result = agent.answer("Total de pagos de septiembre")
         self.assertEqual(155, result.summary_table.rows[0]["pagos_siniestros"])
         self.assertEqual(1, len(self.bq.executed))
-        self.assertIn("run_metric", llm.calls[2][1]["last_tool_result"]["error"])
+        self.assertIn("SUM(`pago_gross`)", self.bq.executed[0][0])
 
     def test_contradictory_type_and_missing_amount_never_execute_wrong_totals(self):
         wrong = metric("pagos_siniestros")
@@ -190,7 +211,7 @@ class ClaimsAgentTests(unittest.TestCase):
         agent, llm = agent_for([metric("pagos_siniestros"), action("finish", answer="Falta el importe requerido.")], self.bq)
         agent.answer("Pagos de septiembre de 2026")
         self.assertEqual([], self.bq.executed)
-        self.assertIn("incurrido_total", llm.calls[-1][1]["last_tool_result"]["error"])
+        self.assertIn("pago_gross", llm.calls[-1][1]["last_tool_result"]["error"])
 
     def test_typo_is_corrected_against_live_schema_and_notice_is_preserved(self):
         agent, _ = agent_for([
@@ -208,9 +229,9 @@ class ClaimsAgentTests(unittest.TestCase):
         corrected["group_by"] = ["ramo"]  # documented alias of ramo_comercial in claims
         agent, llm = agent_for([wrong, corrected, action("finish", answer="Pagos por ramo.")], self.bq)
         result = agent.answer("Pagos por ramo de septiembre")
-        self.assertEqual(({"ramo": "AUTOS", "pagos_siniestros": 155},), result.summary_table.rows)
+        self.assertEqual(({"ramo": "AUTOS", "pagos_siniestros": 155}, {"ramo": "Total general", "pagos_siniestros": 155}), result.summary_table.rows)
         self.assertEqual(1, len(self.bq.executed))
-        self.assertIn("no existe", llm.calls[2][1]["last_tool_result"]["error"])
+        self.assertIn("ramo_comercial", self.bq.executed[0][0])
 
     def test_metadata_failure_uses_dry_run_and_does_not_block_confirmed_metric(self):
         self.bq.no_metadata = True
@@ -219,21 +240,20 @@ class ClaimsAgentTests(unittest.TestCase):
         self.assertEqual(155, result.summary_table.rows[0]["pagos_siniestros"])
 
     def test_stale_schema_is_refreshed_and_classes_cache_expires(self):
-        agent, _ = agent_for([metric("honorarios"), action("finish", answer="Honorarios consultados."),
-                              metric("honorarios"), action("finish", answer="Honorarios consultados.")], self.bq)
+        agent, _ = agent_for([metric("honorarios"), metric("honorarios")], self.bq)
         agent.answer("Honorarios de septiembre de 2026")
         age, labels = agent._class_cache[TABLE]
         agent._class_cache[TABLE] = (age - 3601, labels)
         from dataclasses import replace
         table = agent.catalog.tables[TABLE]
-        agent.catalog.tables[TABLE] = replace(table, columns={k: v for k, v in table.columns.items() if k != "incurrido_total"})
+        agent.catalog.tables[TABLE] = replace(table, columns={k: v for k, v in table.columns.items() if k != "pago_gross"})
         result = agent.answer("Honorarios de septiembre de 2026")
         self.assertEqual(20, result.summary_table.rows[0]["honorarios"])
         self.assertEqual(2, self.bq.metadata_calls)
         self.assertEqual(2, sum("SELECT DISTINCT" in sql for sql, _ in self.bq.executed))
 
     def test_ambiguous_class_needs_explicit_reply_not_an_unverified_model_filter(self):
-        self.bq.db.execute("UPDATE claims SET clase_pago = 'Honorarios ajustador' WHERE clase_pago = 'Honorarios'")
+        self.bq.db.execute("UPDATE claims SET cod_estimacion = 'Honorarios ajustador' WHERE cod_estimacion = 'Honorarios'")
         run = metric("honorarios")
         agent, _ = agent_for([run, action("clarify", clarification={
             "question": "¿Qué etiqueta de honorarios incluyo?", "metric_key": "honorarios", "proposed_rule": ""}),
@@ -243,17 +263,17 @@ class ClaimsAgentTests(unittest.TestCase):
         self.assertEqual(2, len(self.bq.executed))
 
     def test_parameters_and_compiled_metric_rows_are_logged_for_audit(self):
-        agent, _ = agent_for([metric("pagos_siniestros"), action("finish", answer="Pagos consultados.")], self.bq)
+        agent, _ = agent_for([metric("indemnizaciones")], self.bq)
         with tempfile.TemporaryDirectory() as directory, SessionStore(directory, owner="david") as store:
-            result = agent.answer("Pagos de septiembre de 2026", session_store=store)
+            result = agent.answer("Indemnizaciones de septiembre de 2026", session_store=store)
             actions = store.get_session(result.session_id)["turns"][0]["actions"]
-            saved = next(item for item in actions if item["action"] == "run_metric")
-            self.assertEqual("pagos", saved["result"]["query_parameters"][0]["value"])
-            self.assertEqual(155, saved["result"]["aggregate_rows"][0]["pagos_siniestros"])
+            saved = next(item for item in actions if item["action"] == "run_analysis")
+            self.assertEqual(["Indemnización"], saved["result"]["query_parameters"][0]["value"])
+            self.assertEqual(130, saved["result"]["aggregate_rows"][0]["indemnizaciones"])
 
     def test_model_cannot_replace_honorarios_by_another_observed_class(self):
         run = metric("honorarios")
-        run["filters"] = [{"field": "clase_pago", "value": "Indemnización"}]
+        run["filters"] = [{"field": "cod_estimacion", "value": "Indemnización"}]
         agent, llm = agent_for([run, action("finish", answer="Ese filtro contradice honorarios.")], self.bq)
         result = agent.answer("Honorarios de septiembre de 2026")
         self.assertIsNone(result.summary_table)
@@ -262,11 +282,10 @@ class ClaimsAgentTests(unittest.TestCase):
         self.assertNotIn("no devolvió filas", result.answer)
 
     def test_class_confirmation_is_reusable_and_scoped_to_the_owner(self):
-        self.bq.db.execute("UPDATE claims SET clase_pago = 'Honorarios ajustador' WHERE clase_pago = 'Honorarios'")
+        self.bq.db.execute("UPDATE claims SET cod_estimacion = 'Honorarios ajustador' WHERE cod_estimacion = 'Honorarios'")
         agent, _ = agent_for([
             metric("honorarios"), action("clarify", clarification={"question": "¿Qué clase incluyo?", "metric_key": "honorarios", "proposed_rule": ""}),
-            metric("honorarios"), action("finish", answer="Resultado consultado."),
-            metric("honorarios"), action("finish", answer="Resultado consultado."),
+            metric("honorarios"), metric("honorarios"),
         ], self.bq)
         with tempfile.TemporaryDirectory() as directory:
             with SessionStore(directory, owner="david") as store:

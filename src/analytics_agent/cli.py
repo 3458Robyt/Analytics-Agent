@@ -645,6 +645,11 @@ def _run_sessions(args: argparse.Namespace, state_dir: str, console: Console) ->
             console.print(Panel(turn["question"], title="Pregunta", border_style="cyan"))
             if turn["answer"]:
                 console.print(Markdown(turn["answer"]))
+            if turn.get("assumptions"):
+                console.print(Panel("\n".join(turn["assumptions"]), title="Supuestos"))
+            saved = turn.get("summary_table")
+            if saved:
+                _render_answer(AgentAnswer("", summary_table=SummaryTable(**saved)), console, "business")
             plan_items = [item["result"].get("plan") for item in turn["actions"] if item["action"] == "plan"]
             if plan_items:
                 console.print(Panel(json.dumps(plan_items[0], ensure_ascii=False, indent=2), title="Plan de análisis"))
@@ -655,6 +660,10 @@ def _run_sessions(args: argparse.Namespace, state_dir: str, console: Console) ->
                 result = action["result"]
                 if action["bq_job_id"]:
                     console.print(f"[dim]Trabajo BigQuery: {action['bq_job_id']}[/dim]")
+                for field, label in (("analysis", "Alcance resuelto"), ("query_parameters", "Parámetros SQL"),
+                                     ("reason", "Motivo pendiente")):
+                    if result.get(field):
+                        console.print(Panel(json.dumps(result[field], ensure_ascii=False, indent=2), title=label))
                 aggregate_rows = result.get("aggregate_rows")
                 columns = result.get("columns") or []
                 if aggregate_rows and columns:

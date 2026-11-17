@@ -47,7 +47,7 @@ Abandonar libera el análisis local cuando no lo está atendiendo otro proceso; 
 ## Componentes y estado durable
 
 - `turn_runtime.py` contiene los servicios compartidos del turno: contexto, decisión del modelo, compilación financiera, herramientas, revisión y presentación. El motor anterior sigue usando esos servicios.
-- `durable_graph.py` conecta los nodos reales `decide`, `query`, `tool`, `review` y `clarify`. Las aclaraciones usan `interrupt()` y `Command(resume=...)`. Los checkpoints se guardan de forma síncrona.
+- `durable_graph.py` conecta los nodos `decide`, `query`, `tool`, `review`, `clarify` y `verify_financial`. Los resultados compilados se guardan antes de entrar a `verify_financial`. Las aclaraciones usan `interrupt()` y `Command(resume=...)`. Los checkpoints se guardan de forma síncrona.
 - `execution_store.py` registra propietario, ejecución, versiones, bloqueo renovable, operaciones de BigQuery y páginas confirmadas. `graph_query.py` recupera filas desde el último offset confirmado.
 - Los checkpoints contienen referencias a cargas locales comprimidas, no clientes, credenciales ni filas completas dentro del estado del grafo. Los resultados necesarios para continuar se guardan por separado en SQLite.
 
@@ -89,15 +89,10 @@ El benchmark usa un proveedor simulado y prohíbe llamadas a BigQuery; informa m
 
 ## Aceptación con datos reales
 
-La aceptación real sigue pendiente: la instancia `sbs-analytics-python-notebook` estaba `TERMINATED` y el intento de encenderla devolvió 403 por falta de `compute.instances.start`. No se ha certificado la coincidencia de cifras reales ni la latencia del endpoint desde Workbench.
-
-Una vez encendida, desde la terminal del runtime autorizado:
-
-```bash
-python scripts/validate_workbench.py --execute --report workbench-validation.json
-```
-
-Revisa antes las preguntas y SQL de referencia del script. `--execute` confirma esta batería de consultas de lectura. Usa el `.env` existente, un estado temporal separado y LangGraph; no altera tus sesiones. Incluye primas por sucursal, ramo 201, comparación de quincenas, retirada del filtro de ramo, pagos, reservas y una lectura de `mm_final_netos`. Contrasta dimensiones y cifras con SQL independiente; exige una diferencia máxima de un centavo para importes. El presupuesto acumulado de estimaciones dry run es 10 GiB para la batería, incluyendo referencias, y no se impone a las consultas normales del agente. Los errores o discrepancias hacen que termine con código distinto de cero y escriba el reporte local; no inventa datos para aprobar.
+La aceptación de importes requiere ejecutar desde el Workbench autorizado. El
+procedimiento de [diagnóstico y conciliación](CLAIMS_V6.md#diagnóstico-y-conciliación-en-workbench)
+explica cómo verificar qué periodos cubre `mm_final_netos` y cómo configurar el
+corte antes de ejecutar la batería de solo lectura.
 
 El reporte contiene auditoría SQL y referencias de trabajos; revísalo localmente y no lo publiques sin comprobar su contenido. La rama queda disponible para probar y el PR permanece en borrador hasta completar esta aceptación.
 

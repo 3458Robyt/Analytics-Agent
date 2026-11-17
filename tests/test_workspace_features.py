@@ -174,8 +174,8 @@ class WorkspaceTests(unittest.TestCase):
         result = self.store.knowledge("pagos de siniestros")
         payment = next(item for item in result["matches"] if item["metric_key"] == "pagos_siniestros")
         edges = payment["relationships"]
-        self.assertTrue(any(item["relation"] == "aggregates" and item["label"] == "incurrido_total" for item in edges))
-        self.assertTrue(any(item["relation"] == "requires_filter" and item["details"]["value"] == "Pagos" for item in edges))
+        self.assertTrue(any(item["relation"] == "aggregates" and item["label"] == "pago_gross" for item in edges))
+        self.assertFalse(any(item["relation"] == "requires_filter" for item in edges))
         self.assertTrue(all(item["evidence"]["status"] == "validated" for item in edges))
 
     def test_query_metrics_keep_one_event_per_attempt_and_count_retries(self):
@@ -301,8 +301,8 @@ class DateScopeTests(unittest.TestCase):
     def test_no_date_metric_compilation_retains_business_filters(self):
         definitions = load_metric_definitions()
         compiled = compile_metric_query(definitions["pagos_siniestros"], start_date="", end_date="", allow_unbounded=True)
-        self.assertIn("SUM(`incurrido_total`)", compiled.sql)
-        self.assertTrue(any(param["value"] == "pagos" for param in compiled.parameters))
+        self.assertIn("SUM(`pago_gross`)", compiled.sql)
+        self.assertEqual((), compiled.parameters)
         self.assertNotIn("TIMESTAMP(", compiled.sql)
 
     def test_provider_failure_is_persisted_as_error(self):

@@ -172,6 +172,12 @@ class SessionStore(WorkspaceStateMixin):
             CREATE INDEX IF NOT EXISTS learning_evidence_turn_idx ON learning_evidence(turn_id);
             CREATE INDEX IF NOT EXISTS learning_queue_owner_status_idx ON learning_queue(owner, status, created_at);
             CREATE INDEX IF NOT EXISTS query_results_session_idx ON query_results(owner, session_id, created_at);
+            CREATE TABLE IF NOT EXISTS analysis_intent (
+                session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
+                owner TEXT NOT NULL,
+                turn_id TEXT NOT NULL REFERENCES turns(turn_id) ON DELETE CASCADE,
+                spec_json TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS analysis_state (
                 session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
                 owner TEXT NOT NULL,
@@ -491,7 +497,27 @@ class SessionStore(WorkspaceStateMixin):
                                       (self.owner, session_id)).fetchone()
         return json.loads(row[0]) if row else {}
 
-    def set_analysis_state(self, session_id: str, spec: Mapping[str, Any], *, glossary_version: int = 5) -> None:
+    def get_analysis_intent(self, session_id: str) -> dict[str, Any]:
+        row = self.connection.execute(
+            "SELECT spec_json FROM analysis_intent WHERE owner = ? AND session_id = ?",
+            (self.owner, session_id),
+        ).fetchone()
+        return json.loads(row[0]) if row else {}
+
+    def save_analysis_intent(self, session_id: str, turn_id: str, spec: Mapping[str, Any]) -> None:
+        if not self.session_exists(session_id):
+            raise ValueError("La sesión no pertenece a esta cuenta")
+        self.connection.execute(
+            """INSERT INTO analysis_intent VALUES (?, ?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET turn_id=excluded.turn_id, spec_json=excluded.spec_json
+            WHERE analysis_intent.owner=excluded.owner AND
+                (SELECT turn_number FROM turns WHERE turn_id=excluded.turn_id) >=
+                (SELECT turn_number FROM turns WHERE turn_id=analysis_intent.turn_id)""",
+            (session_id, self.owner, turn_id, dumps_json(dict(spec), ensure_ascii=False)),
+        )
+        self.connection.commit()
+
+    def set_analysis_state(self, session_id: str, spec: Mapping[str, Any], *, glossary_version: int = 7) -> None:
         if not self.session_exists(session_id):
             raise ValueError("La sesión no pertenece a esta cuenta")
         self.connection.execute("""INSERT INTO analysis_state VALUES (?, ?, ?, ?, ?)

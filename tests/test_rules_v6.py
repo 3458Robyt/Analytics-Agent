@@ -39,7 +39,7 @@ class RulesV6Tests(unittest.TestCase):
   text,table,_=analysis_presentation({'columns':['ramo','prima_emitida'],'rows':[{'ramo':'A','prima_emitida':Decimal('1.01')},{'ramo':'B','prima_emitida':Decimal('-0.01')}]},compiled)
   self.assertEqual(Decimal('1.00'),table.rows[-1]['prima_emitida'])
   self.assertEqual('Total general',table.rows[-1]['ramo'])
-  self.assertNotIn('Total general',text)
+  self.assertIn('corresponde a **A**',text)
  def test_observed_honorarios(self):
   self.assertEqual(['HONORARIOS Y GASTOS'],select_payment_classes(['HONORARIOS Y GASTOS','INDEMNIZACIONES'],'honorarios'))
 
