@@ -28,10 +28,12 @@ class AnalysisSpec:
     group_by: tuple[str, ...] = ()
     filters: tuple[dict[str, Any], ...] = ()
     population: dict[str, Any] = field(default_factory=dict)
-    payment_date_basis: str = "accident"
+    payment_date_basis: str = "payment"
     assumptions: tuple[str, ...] = ()
     as_of: str = ""
     comparison_periods: tuple[tuple[str, str], ...] = ()
+    rules_version: int = 6
+    amount_basis: str = "gross"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -237,14 +239,12 @@ def resolve_analysis(action: Mapping[str, Any], question: str, *, today: date,
     text = normalized(question)
     followup = bool(re.search(r"^(?:[¿? ]*)(?:y\b|ahora\b|usa\b|haz el calculo\b|vuelve\b|esos\b|confirma\b|cambia\b|igual\b|por\b|con\b|compara|quita|elimina|retira|sin filtro)", text))
     active = dict(active or {})
+    if active.get("rules_version") != 6:
+        active.pop("payment_date_basis", None)
     previous = active if followup or not requested_metrics(question) else {}
     requested = requested_metrics(question)
     supplied = action.get("metric_keys") or ([action["metric_key"]] if action.get("metric_key") else [])
     keys = requested or tuple(supplied) or tuple(previous.get("metric_keys", ()))
-    if (re.search(r"\b(?:net[ao]s?|retenid[ao]s?|cedid[ao]s?)\b", text)
-            and (re.search(r"\bprimas?\b", text) and "prima_emitida" in keys
-                 or re.search(r"\b(?:pagos?|siniestros?)\b", text) and "pagos_siniestros" in keys)):
-        raise MetricDefinitionError("El importe neto, retenido o cedido necesita su propio mapeo; explora la fuente con SQL sin sustituirlo por la métrica bruta")
     if not keys:
         raise MetricDefinitionError("Indica qué métricas debe contener el análisis")
     # A follow-up asking only for a denominator changes the ratio already requested.
@@ -259,6 +259,12 @@ def resolve_analysis(action: Mapping[str, Any], question: str, *, today: date,
             previous and not requested and re.search(r"fecha_(?:accidente|pago)|fecha de (?:accidente|pago)", text)):
         keys = tuple(previous.get("metric_keys", keys))
     keys = tuple(dict.fromkeys(keys))
+    if re.search(r"\bincurrid[oa]s?\b", text):
+        keys = ("incurrido_siniestros",)
+    elif re.search(r"\bvariacion (?:de )?(?:las )?reservas\b", text):
+        keys = ("variacion_reservas",)
+    elif "anterior" in text and "reservas_avisadas" in keys:
+        keys = tuple("reservas_anteriores" if k == "reservas_avisadas" else k for k in keys)
     period = period_from_text(question, today=today, inherited=active)
     if period is None:
         start, end = previous.get("start_date", ""), previous.get("end_date", "")
@@ -286,10 +292,10 @@ def resolve_analysis(action: Mapping[str, Any], question: str, *, today: date,
         population = {}  # explicitly switching dimension must not keep the old LOB scope
     elif population is None:
         population = dict(previous.get("population", {}))
-    basis = str(previous.get("payment_date_basis", "accident"))
+    basis = str(previous.get("payment_date_basis", "payment"))
     if re.search(r"fecha_pago|fecha de pago|fecha del pago|pagos efectuados|pagos realizados", text):
         basis = "payment"
-    elif re.search(r"fecha_accidente|fecha de accidente|fecha del accidente", text):
+    elif re.search(r"fecha_accidente|fecha de accidente|fecha del accidente|ocurrencia", text):
         basis = "accident"
     if basis not in {"accident", "payment"}:
         raise MetricDefinitionError("La fecha de pagos debe ser accidente o pago")
@@ -371,4 +377,5 @@ def resolve_analysis(action: Mapping[str, Any], question: str, *, today: date,
     elif previous.get("comparison_periods") and period is None and not monthly:
         comparison = tuple(tuple(item) for item in previous["comparison_periods"])
     return AnalysisSpec(keys, start, end, grain, tuple(dict.fromkeys(group)), filters,
-                        population or {}, basis, notes, today.isoformat(), comparison)
+                        population or {}, basis, notes, today.isoformat(), comparison, 6,
+                        "net" if re.search(r"\bnet[oa]s?\b", text) else "gross" if re.search(r"\b(?:brut[oa]s?|gross)\b", text) else previous.get("amount_basis", "gross"))

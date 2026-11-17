@@ -17,6 +17,10 @@ _request_id_context: contextvars.ContextVar[str] = contextvars.ContextVar(
 )
 
 
+def current_request_id() -> str:
+    return _request_id_context.get()
+
+
 @contextmanager
 def bigquery_request_scope(request_id: str):
     """Give each queued Teams request stable BigQuery job IDs for safe redelivery."""
@@ -25,6 +29,15 @@ def bigquery_request_scope(request_id: str):
         yield
     finally:
         _request_id_context.reset(token)
+
+
+def stable_query_job_id(request_id: str, sql: str, parameters: Sequence[Mapping[str, Any]] = ()) -> str:
+    """Calculate the job ID before submission so an uncertain submission is recoverable."""
+    if not request_id.strip() or not sql.strip():
+        raise ValueError("Se requieren el identificador de ejecución y el SQL")
+    canonical = dumps_json(list(parameters), sort_keys=True, default=str, ensure_ascii=False)
+    digest = hashlib.sha256((request_id.strip() + "\0" + sql + "\0" + canonical).encode("utf-8")).hexdigest()[:48]
+    return "analytics_agent_" + digest
 
 
 class BigQueryError(RuntimeError):
@@ -316,11 +329,7 @@ class BigQueryAdapter:
                 config.query_parameters = self._query_parameters(bigquery, parameters)
             request_id = _request_id_context.get()
             if request_id:
-                canonical_parameters = dumps_json(list(parameters), sort_keys=True, default=str, ensure_ascii=False)
-                digest = hashlib.sha256(
-                    (request_id + "\0" + sql + "\0" + canonical_parameters).encode("utf-8")
-                ).hexdigest()[:48]
-                job_id = "analytics_agent_" + digest
+                job_id = stable_query_job_id(request_id, sql, parameters)
                 try:
                     job = self.client.query(
                         sql,
@@ -346,6 +355,29 @@ class BigQueryAdapter:
             self._jobs[query_id] = job
             first_page = self._next_page(query_id, iterator=iterator)
             return first_page
+        except BigQueryError:
+            raise
+        except Exception as exc:
+            raise BigQueryError(_safe_error(exc)) from exc
+
+    def resume_query(self, request_id: str, sql: str, *, project: str, location: str,
+                     parameters: Sequence[Mapping[str, Any]] = (), start_index: int = 0,
+                     query_id: str = "") -> QueryPage:
+        """Read an existing job at an offset; this method never submits a query."""
+        if not project.strip() or not location.strip() or start_index < 0:
+            raise ValueError("Se requieren proyecto, región y desplazamiento no negativo")
+        job_id = stable_query_job_id(request_id, sql, parameters)
+        result_id = query_id or str(uuid4())
+        if result_id in self._pages:
+            raise BigQueryError("El identificador de resultado ya está en uso")
+        try:
+            job = self.client.get_job(job_id, project=project, location=location)
+            if str(getattr(job, "query", "")) != sql:
+                raise BigQueryError("El trabajo recuperado corresponde a otra consulta")
+            iterator = job.result(page_size=self.page_size, start_index=start_index)
+            self._pages[result_id] = iter(iterator.pages)
+            self._jobs[result_id] = job
+            return self._next_page(result_id, iterator=iterator)
         except BigQueryError:
             raise
         except Exception as exc:

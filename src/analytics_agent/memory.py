@@ -564,6 +564,13 @@ class SessionStore(WorkspaceStateMixin):
         # Final tables are stored once in turns.summary_table_json, only after
         # the agent confirms they came from aggregate query evidence.
         safe_request.pop("summary_table", None)
+        existing = self.connection.execute(
+            "SELECT action, request_json FROM actions WHERE turn_id = ? AND sequence = ?",
+            (turn_id, sequence)).fetchone()
+        if existing:
+            if existing['action'] != action or json.loads(existing['request_json']) != json.loads(dumps_json(safe_request, ensure_ascii=False)):
+                raise ValueError('La acción recuperada no coincide con el registro persistido')
+            return
         sql_text = str(request.get("sql", ""))
         self.connection.execute(
             """INSERT INTO actions(action_id, turn_id, sequence, action, request_json,

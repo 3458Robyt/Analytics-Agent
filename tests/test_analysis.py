@@ -355,6 +355,22 @@ class AnalysisTests(unittest.TestCase):
             self.assertEqual("date_scope", result.clarification.reason)
             self.assertEqual(0, len(self.oracle.executed))
 
+    def test_failed_analysis_does_not_replace_previous_conversation_context(self):
+        with tempfile.TemporaryDirectory() as folder, SessionStore(folder) as store:
+            session = store.create_session()
+            previous = {"metric_keys": ["prima_emitida"], "start_date": "2026-09-01",
+                        "end_date": "2026-10-01", "filters": []}
+            store.set_analysis_state(session, previous)
+            agent, _ = self.agent([action("run_analysis", metric_keys=["prima_emitida"],
+                                          start_date="2026-10-01", end_date="2026-11-01")])
+            with patch.object(self.oracle, "dry_run", return_value=DryRunResult(False, 0, "fallo simulado")) as dry_run:
+                try:
+                    agent.answer("Primas emitidas de octubre de 2026", session_store=store, session_id=session)
+                except Exception:
+                    pass
+                self.assertTrue(dry_run.called)
+            self.assertEqual(previous, store.get_analysis_state(session))
+
     def test_explicit_branch_and_organization_are_distinct_scopes(self):
         compiled = self.compile("Primas emitidas del ramo comercial COPROPIEDADES en septiembre de 2026")
         self.assertFalse(compiled.spec.population)
